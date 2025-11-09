@@ -50,6 +50,20 @@ class Map:
         
     def check_teleport(self, pos: Position) -> Teleport | None:
         '''TODO: Teleportation'''
+        px, py = pos.x, pos.y
+
+        for tp in self.teleporters:
+            # 每個 teleport 在 json 裡是以「格」存的
+            # Teleport.from_dict() 會把它乘上 TILE_SIZE，所以這裡是「像素座標的左上角」
+            rect = pg.Rect(
+                int(tp.pos.x),
+                int(tp.pos.y),
+                GameSettings.TILE_SIZE,
+                GameSettings.TILE_SIZE,
+            )
+            if rect.collidepoint(px, py):
+                return tp
+
         return None
 
     def _render_all_layers(self, target: pg.Surface) -> None:
@@ -82,6 +96,9 @@ class Map:
                         Append the collision rectangle to the rects[] array
                         Remember scale the rectangle with the TILE_SIZE from settings
                         '''
+                        rect = pg.Rect(x * GameSettings.TILE_SIZE, y * GameSettings.TILE_SIZE,GameSettings.TILE_SIZE,GameSettings.TILE_SIZE)
+                        rects.append(rect)
+
                         pass
         return rects
 

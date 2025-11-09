@@ -18,7 +18,7 @@ class Button(UIComponent):
         self,
         img_path: str, img_hovered_path:str,
         x: int, y: int, width: int, height: int,
-        on_click: Callable[[], None] | None = None
+        on_click: Callable[[], None] | None = None # 這個是點擊按鈕的行為
     ):
         self.img_button_default = Sprite(img_path, (width, height))
         self.hitbox = pg.Rect(x, y, width, height)
@@ -30,6 +30,9 @@ class Button(UIComponent):
         self.img_button = ...       --> This is a reference for which image to render
         self.on_click = ...
         '''
+        self.img_button_hover = Sprite(img_hovered_path, (width, height))
+        self.img_button = self.img_button_default
+        self.on_click = on_click 
 
     @override
     def update(self, dt: float) -> None:
@@ -46,6 +49,15 @@ class Button(UIComponent):
         else:
             ...
         '''
+
+        if self.hitbox.collidepoint(input_manager.mouse_pos):
+            self.img_button = self.img_button_hover
+
+            if input_manager.mouse_pressed(1) and self.on_click is not None:
+                self.on_click()
+        else:
+            self.img_button = self.img_button_default
+        
         pass
     
     @override
@@ -54,21 +66,23 @@ class Button(UIComponent):
         [TODO HACKATHON 1]
         You might want to change this too
         '''
-        _ = screen.blit(self.img_button_default.image, self.hitbox)
+
+        _ = screen.blit(self.img_button.image, self.hitbox)
 
 
 def main():
     import sys
     import os
     
+
     pg.init()
 
     WIDTH, HEIGHT = 800, 800
     screen = pg.display.set_mode((WIDTH, HEIGHT))
     pg.display.set_caption("Button Test")
     clock = pg.time.Clock()
-    
     bg_color = (0, 0, 0)
+
     def on_button_click():
         nonlocal bg_color
         if bg_color == (0, 0, 0):
@@ -79,13 +93,14 @@ def main():
     button = Button(
         img_path="UI/button_play.png",
         img_hovered_path="UI/button_play_hover.png",
-        x=WIDTH // 2 - 50,
+        x=WIDTH // 2 - 50 - 120,
         y=HEIGHT // 2 - 50,
         width=100,
         height=100,
         on_click=on_button_click
     )
-    
+
+
     running = True
     dt = 0
     
@@ -96,6 +111,7 @@ def main():
             input_manager.handle_events(event)
         
         dt = clock.tick(60) / 1000.0
+
         button.update(dt)
         
         input_manager.reset()

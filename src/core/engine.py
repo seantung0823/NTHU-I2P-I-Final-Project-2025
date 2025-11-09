@@ -5,6 +5,7 @@ from .services import scene_manager, input_manager
 
 from src.scenes.menu_scene import MenuScene
 from src.scenes.game_scene import GameScene
+from src.scenes.setting_scene import SettingScene
 
 class Engine:
 
@@ -25,9 +26,11 @@ class Engine:
 
         scene_manager.register_scene("menu", MenuScene())
         scene_manager.register_scene("game", GameScene())
+        scene_manager.register_scene("setting", SettingScene())
         '''
         [TODO HACKATHON 5]
         Register the setting scene here
+        
         '''
         scene_manager.change_scene("menu")
 

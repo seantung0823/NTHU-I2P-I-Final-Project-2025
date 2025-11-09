@@ -12,16 +12,31 @@ class MenuScene(Scene):
     background: BackgroundSprite
     # Buttons
     play_button: Button
+    setting_button: Button
+    quit_button: Button
     
     def __init__(self):
         super().__init__()
         self.background = BackgroundSprite("backgrounds/background1.png")
 
         px, py = GameSettings.SCREEN_WIDTH // 2, GameSettings.SCREEN_HEIGHT * 3 // 4
+        
         self.play_button = Button(
             "UI/button_play.png", "UI/button_play_hover.png",
-            px + 50, py, 100, 100,
+            px - 50 + 120, py, 100, 100,
             lambda: scene_manager.change_scene("game")
+        )
+
+        self.setting_button = Button(
+            "UI/button_setting.png", "UI/button_setting_hover.png",
+            px - 50, py, 100, 100,
+            lambda: scene_manager.change_scene("setting")
+        )
+
+        self.quit_button = Button(
+            "UI/button_x.png", "UI/button_x_hover.png",
+            px - 50 - 120, py, 100, 100,
+            lambda: pg.event.post(pg.event.Event(pg.QUIT))
         )
         
     @override
@@ -39,8 +54,13 @@ class MenuScene(Scene):
             scene_manager.change_scene("game")
             return
         self.play_button.update(dt)
+        self.setting_button.update(dt)
+        self.quit_button.update(dt)
+
 
     @override
     def draw(self, screen: pg.Surface) -> None:
         self.background.draw(screen)
         self.play_button.draw(screen)
+        self.setting_button.draw(screen)
+        self.quit_button.draw(screen)

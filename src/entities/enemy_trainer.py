@@ -51,6 +51,7 @@ class EnemyTrainer(Entity):
         self.warning_sign.update_pos(Position(x + GameSettings.TILE_SIZE // 4, y - GameSettings.TILE_SIZE // 2))
         self.detected = False
 
+
     @override
     def update(self, dt: float) -> None:
         self._movement.update(self, dt)

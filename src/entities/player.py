@@ -12,14 +12,48 @@ class Player(Entity):
     game_manager: GameManager
 
     def __init__(self, x: float, y: float, game_manager: GameManager) -> None:
-        super().__init__(x, y, game_manager)
+        super().__init__(x, y, game_manager) 
+
+
+    def get_rect(self) -> pg.Rect:
+        # 先用一格大小，之後覺得碰撞太大再縮
+        return pg.Rect(int(self.position.x),int(self.position.y),GameSettings.TILE_SIZE,GameSettings.TILE_SIZE)  
+
 
     @override
     def update(self, dt: float) -> None:
         dis = Position(0, 0)
+
         '''
         [TODO HACKATHON 2]
         Calculate the distance change, and then normalize the distance
+        '''
+        
+        if input_manager.key_down(pg.K_LEFT) or input_manager.key_down(pg.K_a):
+            dis.x -= 1
+        if input_manager.key_down(pg.K_RIGHT) or input_manager.key_down(pg.K_d):
+            dis.x += 1
+        if input_manager.key_down(pg.K_UP) or input_manager.key_down(pg.K_w):
+            dis.y -= 1
+        if input_manager.key_down(pg.K_DOWN) or input_manager.key_down(pg.K_s):
+            dis.y += 1
+
+        length = math.sqrt(dis.x**2 + dis.y**2) # 避免斜著走比較快
+
+        if length != 0:
+            dis.x = dis.x / length * self.speed * dt
+            dis.y = dis.y / length * self.speed * dt   
+
+        self.position.x += dis.x
+        if self.game_manager.check_collision(self.get_rect()):
+            self.position.x = self._snap_to_grid(self.position.x)
+        
+        self.position.y += dis.y
+        if self.game_manager.check_collision(self.get_rect()):
+            self.position.y = self._snap_to_grid(self.position.y)
+
+
+        '''
         
         [TODO HACKATHON 4]
         Check if there is collision, if so try to make the movement smooth
@@ -42,12 +76,15 @@ class Player(Entity):
         
         self.position = ...
         '''
+
+
         
         # Check teleportation
         tp = self.game_manager.current_map.check_teleport(self.position)
         if tp:
             dest = tp.destination
             self.game_manager.switch_map(dest)
+            return 
                 
         super().update(dt)
 

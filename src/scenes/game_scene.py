@@ -9,6 +9,8 @@ from src.core.services import sound_manager
 from src.sprites import Sprite
 from typing import override
 
+import pytmx
+
 class GameScene(Scene):
     game_manager: GameManager
     online_manager: OnlineManager | None
@@ -72,9 +74,22 @@ class GameScene(Scene):
             Right now it's hard coded, you need to follow the player's positions
             you may use the below example, but the function still incorrect, you may trace the entity.py
             
-            camera = self.game_manager.player.camera
+            
             '''
-            camera = PositionCamera(16 * GameSettings.TILE_SIZE, 30 * GameSettings.TILE_SIZE)
+            # camera = PositionCamera(16 * GameSettings.TILE_SIZE, 30 * GameSettings.TILE_SIZE)
+            # ----- 
+            
+            camera = self.game_manager.player.camera
+            
+            player = self.game_manager.player
+            if player:
+                cam_x = int(player.position.x) - GameSettings.SCREEN_WIDTH // 2
+                cam_y = int(player.position.y) - GameSettings.SCREEN_HEIGHT // 2
+                camera = PositionCamera(cam_x, cam_y)
+            else:
+                camera = PositionCamera(0, 0)
+            # -----
+            
             self.game_manager.current_map.draw(screen, camera)
             self.game_manager.player.draw(screen, camera)
         else:
