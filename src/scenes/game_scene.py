@@ -67,44 +67,36 @@ class GameScene(Scene):
         
     @override
     def draw(self, screen: pg.Surface):        
+        # 先決定 camera 要用什麼
         if self.game_manager.player:
-            '''
-            [TODO HACKATHON 3]
-            Implement the camera algorithm logic here
-            Right now it's hard coded, you need to follow the player's positions
-            you may use the below example, but the function still incorrect, you may trace the entity.py
-            
-            
-            '''
-            # camera = PositionCamera(16 * GameSettings.TILE_SIZE, 30 * GameSettings.TILE_SIZE)
-            # ----- 
-            
+            # 把玩家自己的 camera 拿出來用
             camera = self.game_manager.player.camera
-            
-            player = self.game_manager.player
-            if player:
-                cam_x = int(player.position.x) - GameSettings.SCREEN_WIDTH // 2
-                cam_y = int(player.position.y) - GameSettings.SCREEN_HEIGHT // 2
-                camera = PositionCamera(cam_x, cam_y)
-            else:
-                camera = PositionCamera(0, 0)
-            # -----
-            
-            self.game_manager.current_map.draw(screen, camera)
-            self.game_manager.player.draw(screen, camera)
         else:
+            # 沒玩家就固定用 (0, 0)
             camera = PositionCamera(0, 0)
-            self.game_manager.current_map.draw(screen, camera)
+
+        # 先畫地圖
+        self.game_manager.current_map.draw(screen, camera)
+
+        # 再畫玩家（如果有）
+        if self.game_manager.player:
+            self.game_manager.player.draw(screen, camera)
+
+        # 再畫敵人
         for enemy in self.game_manager.current_enemy_trainers:
             enemy.draw(screen, camera)
 
+        # 畫背包 / UI
         self.game_manager.bag.draw(screen)
         
+        # 畫線上其他玩家（如果有）
         if self.online_manager and self.game_manager.player:
             list_online = self.online_manager.get_list_players()
             for player in list_online:
                 if player["map"] == self.game_manager.current_map.path_name:
-                    cam = self.game_manager.player.camera
-                    pos = cam.transform_position_as_position(Position(player["x"], player["y"]))
+                    # 這裡也用同一個 camera
+                    pos = camera.transform_position_as_position(
+                        Position(player["x"], player["y"])
+                    )
                     self.sprite_online.update_pos(pos)
                     self.sprite_online.draw(screen)
