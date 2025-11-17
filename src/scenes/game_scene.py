@@ -46,8 +46,6 @@ class GameScene(Scene):
         
     @override
     def update(self, dt: float):
-        # Check if there is assigned next scene
-        self.game_manager.try_switch_map()
         
         # Update player and other data
         if self.game_manager.player:
@@ -64,6 +62,9 @@ class GameScene(Scene):
                 self.game_manager.player.position.y,
                 self.game_manager.current_map.path_name
             )
+        
+        # Check if there is assigned next scene
+        self.game_manager.try_switch_map()
         
     @override
     def draw(self, screen: pg.Surface):        

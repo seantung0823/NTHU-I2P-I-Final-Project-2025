@@ -77,7 +77,9 @@ class Player(Entity):
         self.position = ...
         '''
 
-
+         # 這一幀如果「不在傳送區」，就更新安全位置
+        if not self.game_manager.current_map.check_teleport(self.position):
+            self.game_manager.last_positions[self.game_manager.current_map_key] = self.position.copy()
         
         # Check teleportation
         tp = self.game_manager.current_map.check_teleport(self.position)

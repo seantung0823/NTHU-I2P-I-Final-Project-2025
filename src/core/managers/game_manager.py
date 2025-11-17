@@ -40,6 +40,9 @@ class GameManager:
         # Check If you should change scene
         self.should_change_scene = False
         self.next_map = ""
+
+        # 新增：記錄每張地圖「最後一次離開時」玩家在哪
+        self.last_positions: dict[str, Position] = {}
         
     @property
     def current_map(self) -> Map:
@@ -57,6 +60,8 @@ class GameManager:
         if target not in self.maps:
             Logger.warning(f"Map '{target}' not loaded; cannot switch.")
             return
+        #if self.player is not None:
+         #   self.last_positions[self.current_map_key] = self.player.position.copy()
         
         self.next_map = target
         self.should_change_scene = True
@@ -67,7 +72,12 @@ class GameManager:
             self.next_map = ""
             self.should_change_scene = False
             if self.player:
-                self.player.position = self.maps[self.current_map_key].spawn
+                # 如果之前來過這張地圖，就回到「上次離開的位置」
+                if self.current_map_key in self.last_positions:
+                    self.player.position = self.last_positions[self.current_map_key].copy()
+                else:
+                    # 第一次來這張地圖，才用 spawn
+                    self.player.position = self.maps[self.current_map_key].spawn.copy()
             
     def check_collision(self, rect: pg.Rect) -> bool:
         if self.maps[self.current_map_key].check_collision(rect):
