@@ -61,7 +61,7 @@ class GameManager:
             Logger.warning(f"Map '{target}' not loaded; cannot switch.")
             return
         #if self.player is not None:
-         #   self.last_positions[self.current_map_key] = self.player.position.copy()
+        #    self.last_positions[self.current_map_key] = self.player.position.copy()
         
         self.next_map = target
         self.should_change_scene = True
