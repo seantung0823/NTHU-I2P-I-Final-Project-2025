@@ -32,7 +32,7 @@ class SettingScene(Scene):
             480, 420
         )
 
-        # 左下角返回按鈕
+        # 左下角返回按鈕（在 SettingScene 裡是直接回 menu）
         self.back_button = Button(
             "UI/button_back.png", "UI/button_back_hover.png",
             self.panel_rect.left + 20,
@@ -129,7 +129,12 @@ class SettingScene(Scene):
 
     # === 畫出設定面板（Scene 本身 + overlay 都共用） ===
     @staticmethod
-    def draw_panel(screen: pg.Surface, panel_rect: pg.Rect, back_button: Button) -> None:
+    def draw_panel(
+        screen: pg.Surface,
+        panel_rect: pg.Rect,
+        back_button: Button | None,
+        bottom_buttons: list[Button] | None = None
+    ) -> None:
         # panel 底色與外框
         pg.draw.rect(screen, (231, 161, 74), panel_rect)
         pg.draw.rect(screen, (82, 44, 32), panel_rect, 5)
@@ -139,18 +144,6 @@ class SettingScene(Scene):
         title = font.render("SETTINGS", True, (20, 20, 20))
         screen.blit(title, (panel_rect.left + 20, panel_rect.top + 10))
 
-        # 右上角 X 裝飾按鈕（這裡不處理點擊）
-        close_size = 32
-        close_rect = pg.Rect(
-            panel_rect.right - close_size - 10,
-            panel_rect.top + 10,
-            close_size,
-            close_size,
-        )
-        pg.draw.rect(screen, (255, 230, 180), close_rect)
-        pg.draw.rect(screen, (82, 44, 32), close_rect, 2)
-        pg.draw.line(screen, (82, 44, 32), close_rect.topleft, close_rect.bottomright, 2)
-        pg.draw.line(screen, (82, 44, 32), close_rect.topright, close_rect.bottomleft, 2)
 
         # 目前音量/靜音狀態
         volume = SettingScene.volume
@@ -213,10 +206,16 @@ class SettingScene(Scene):
         small_font = pg.font.SysFont(None, 28)
         hint_text = small_font.render("Press ESC to close", True, (20, 20, 20))
 
-        back_button.draw(screen)
-        hint_x = back_button.hitbox.right + 10
-        hint_y = back_button.hitbox.centery - hint_text.get_height() // 2
-        screen.blit(hint_text, (hint_x, hint_y))
+        if back_button is not None:
+            back_button.draw(screen)
+            hint_x = back_button.hitbox.right + 10
+            hint_y = back_button.hitbox.centery - hint_text.get_height() // 2
+            screen.blit(hint_text, (hint_x, hint_y))
+
+        # ★ 遊戲 overlay 用：底下一排按鈕（例如你那 3 顆方塊）
+        if bottom_buttons:
+            for btn in bottom_buttons:
+                btn.draw(screen)
 
     @override
     def draw(self, screen: pg.Surface) -> None:
