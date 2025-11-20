@@ -212,7 +212,7 @@ class SettingScene(Scene):
             hint_y = back_button.hitbox.centery - hint_text.get_height() // 2
             screen.blit(hint_text, (hint_x, hint_y))
 
-        # ★ 遊戲 overlay 用：底下一排按鈕（例如你那 3 顆方塊）
+        # 遊戲 overlay 用：底下一排按鈕（例如你那 3 顆方塊）
         if bottom_buttons:
             for btn in bottom_buttons:
                 btn.draw(screen)

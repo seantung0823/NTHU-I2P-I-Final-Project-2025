@@ -27,6 +27,7 @@ class Engine:
         scene_manager.register_scene("menu", MenuScene())
         scene_manager.register_scene("game", GameScene())
         scene_manager.register_scene("setting", SettingScene())
+        scene_manager.register_scene("bag", SettingScene())
         '''
         [TODO HACKATHON 5]
         Register the setting scene here

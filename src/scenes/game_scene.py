@@ -11,6 +11,8 @@ from src.interface.components import Button
 from src.scenes.setting_scene import SettingScene
 from typing import override
 
+from src.scenes.bag_scene import BagScene
+
 import pytmx
 
 
@@ -25,6 +27,10 @@ class GameScene(Scene):
     bottom_buttons: list[Button]
     is_setting_open: bool
     panel_rect: pg.Rect
+
+    # 背包相關
+    bag_button: Button
+    is_bag_open: bool
     
     def __init__(self):
         super().__init__()
@@ -45,21 +51,41 @@ class GameScene(Scene):
             (GameSettings.TILE_SIZE, GameSettings.TILE_SIZE)
         )
 
+        # ====== 彈窗狀態 ======
+        self.popup_msg: str | None = None
+        self.popup_timer: float = 0.0  # 倒數 2 秒
+
         # ====== 設定 overlay 狀態 ======
         self.is_setting_open = False
+        self.is_bag_open = False  
 
         sw, sh = GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT
 
-        # 右上角：打開設定 overlay
+        # 右上角兩顆按鈕：背包在左、設定在右
+        btn_size_top = 60
+        margin_top = 16
+        margin_right = 16
+        gap_top = 10
+
+        # 設定按鈕（最右邊）
         self.setting_button = Button(
             "UI/button_setting.png", "UI/button_setting_hover.png",
-            sw - 16 - 60,   # 離右邊 16 px
-            16,             # 離上方 16 px
-            60, 60,
+            sw - margin_right - btn_size_top,
+            margin_top,
+            btn_size_top, btn_size_top,
             lambda: self.open_setting_overlay()
         )
 
-        # 設定面板（跟 SettingScene 一樣大小，置中）
+        # 背包按鈕（在設定左邊）
+        self.bag_button = Button(
+            "UI/button_backpack.png", "UI/button_backpack_hover.png",
+            sw - margin_right - btn_size_top * 2 - gap_top,
+            margin_top,
+            btn_size_top, btn_size_top,
+            lambda: self.open_bag_overlay()
+        )
+
+        # 設定／背包共用的面板
         wid_mid, hig_mid = sw // 2, sh // 2
         self.panel_rect = pg.Rect(
             wid_mid - 480 // 2,
@@ -67,31 +93,26 @@ class GameScene(Scene):
             480, 420
         )
 
-        # ====== 下方一排三顆按鈕：Save / Menu / Back ======
+        # 下方一排三顆按鈕：Save / Load / Menu
         btn_size = 80
         gap = 20
-
-        # 靠 panel 左邊、在中間偏下的位置
         start_x = self.panel_rect.left + 40
         row_y = self.panel_rect.top + 190
 
-        # 左：存檔（之後可接真正存檔功能）
         save_button = Button(
             "UI/button_save.png", "UI/button_save_hover.png",
             start_x, row_y,
             btn_size, btn_size,
-            lambda: None
+            lambda: self.save_game()
         )
 
-        # 中：回主選單
-        menu_button = Button(
+        load_button = Button(
             "UI/button_load.png", "UI/button_load_hover.png",
             start_x + (btn_size + gap), row_y,
             btn_size, btn_size,
-            lambda: None
+            lambda: self.load_game()
         )
 
-        # 右：回到遊戲（關閉設定 overlay）
         back_button = Button(
             "UI/button_back.png", "UI/button_back_hover.png",
             start_x + (btn_size + gap) * 2, row_y,
@@ -99,10 +120,9 @@ class GameScene(Scene):
             lambda: scene_manager.change_scene("menu")
         )
 
-        # 交給 SettingScene.draw_panel 畫下面那一排
-        self.bottom_buttons = [save_button, menu_button, back_button]
+        self.bottom_buttons = [save_button, load_button, back_button]
 
-        # ====== 面板右上角的叉叉（button_x）：只關閉設定 ======
+        # 面板右上角叉叉
         close_size = 40
         close_x = self.panel_rect.right - close_size - 10
         close_y = self.panel_rect.top + 10
@@ -110,21 +130,51 @@ class GameScene(Scene):
             "UI/button_x.png", "UI/button_x_hover.png",
             close_x, close_y,
             close_size, close_size,
-            lambda: self.close_setting_overlay()
+            lambda: self.close_all_overlays()
         )
 
-    # 打開 / 關閉 overlay
+
+    # ====== 彈窗功能 ======
+    def show_popup(self, msg: str):
+        self.popup_msg = msg
+        self.popup_timer = 1.0
+
+
+    # ====== 存檔 / 讀檔 ======
+    def save_game(self):
+        self.game_manager.save("saves/backup.json")
+        Logger.info("Game saved to saves/backup.json")
+        self.show_popup("Saved Successful!")
+
+    def load_game(self):
+        manager = GameManager.load("saves/backup.json")
+        if manager is None:
+            Logger.error("Failed to load backup")
+            self.show_popup("Load Successful")
+            return
+
+        self.game_manager = manager
+        Logger.info("Game loaded from saves/backup.json")
+        self.show_popup("Loaded!")
+
+
+    # ====== Overlay 開關 ======
+    def close_all_overlays(self):
+        self.is_setting_open = False
+        self.is_bag_open = False
+
     def open_setting_overlay(self):
         self.is_setting_open = True
+        self.is_bag_open = False
 
-    def close_setting_overlay(self):
+    def open_bag_overlay(self):
+        self.is_bag_open = True
         self.is_setting_open = False
+
 
     @override
     def enter(self) -> None:
-        # 回GameScene，一律關掉設定視窗（解決 game -> menu -> game setting還開著的問題）
-        self.is_setting_open = False
-
+        self.close_all_overlays()
         sound_manager.play_bgm("RBY 103 Pallet Town.ogg")
         if self.online_manager:
             self.online_manager.enter()
@@ -136,37 +186,51 @@ class GameScene(Scene):
         
     @override
     def update(self, dt: float):
-        # 先更新右上角設定按鈕
+
+        # ====== 彈窗倒數 ======
+        if self.popup_timer > 0:
+            self.popup_timer -= dt
+            if self.popup_timer <= 0:
+                self.popup_msg = None
+
+        # ----- 右上按鈕 -----
         self.setting_button.update(dt)
+        self.bag_button.update(dt)
 
-        # 如果設定畫面打開，只處理設定，不跑遊戲邏輯
+        # ====== 設定 overlay ======
         if self.is_setting_open:
-            # ESC 關閉
-            if pg.key.get_pressed()[pg.K_ESCAPE]:
-                self.close_setting_overlay()
 
-            # 更新下方三顆按鈕
+            if pg.key.get_pressed()[pg.K_ESCAPE]:
+                self.is_setting_open = False
+
             for btn in self.bottom_buttons:
                 btn.update(dt)
 
-            # 更新右上叉叉
             self.overlay_close_button.update(dt)
-
-            # 使用 SettingScene 一樣的滑桿 / Mute 互動邏輯
             SettingScene.handle_panel_input(self.panel_rect)
             return
+
+        # ====== 背包 overlay ======
+        if self.is_bag_open:
+
+            if pg.key.get_pressed()[pg.K_ESCAPE]:
+                self.is_bag_open = False
+
+            self.overlay_close_button.update(dt)
+            return
         
-        # ====== 以下是原本的遊戲更新邏輯 ======
+        # ====== 原本遊戲邏輯 ======
         if self.game_manager.player:
             self.game_manager.player.update(dt)
+
         for enemy in self.game_manager.current_enemy_trainers:
             enemy.update(dt)
             
         self.game_manager.bag.update(dt)
         
-        if self.game_manager.player is not None and self.online_manager is not None:
-            _ = self.online_manager.update(
-                self.game_manager.player.position.x, 
+        if self.game_manager.player and self.online_manager:
+            self.online_manager.update(
+                self.game_manager.player.position.x,
                 self.game_manager.player.position.y,
                 self.game_manager.current_map.path_name
             )
@@ -175,6 +239,7 @@ class GameScene(Scene):
         
     @override
     def draw(self, screen: pg.Surface):        
+
         # camera
         if self.game_manager.player:
             camera = self.game_manager.player.camera
@@ -192,10 +257,10 @@ class GameScene(Scene):
         for enemy in self.game_manager.current_enemy_trainers:
             enemy.draw(screen, camera)
 
-        # 背包 / UI
+        # 背包
         self.game_manager.bag.draw(screen)
-        
-        # 線上其他玩家
+
+        # 線上玩家
         if self.online_manager and self.game_manager.player:
             list_online = self.online_manager.get_list_players()
             for player in list_online:
@@ -206,32 +271,48 @@ class GameScene(Scene):
                     self.sprite_online.update_pos(pos)
                     self.sprite_online.draw(screen)
 
-        # 固定在最上層的設定按鈕
+        # 右上角 UI
         self.setting_button.draw(screen)
+        self.bag_button.draw(screen)
 
-        # 如果 overlay 有開，就疊上去
-        if self.is_setting_open:
+        # ====== overlay 顯示 ======
+        if self.is_setting_open or self.is_bag_open:
             sw, sh = GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT
 
-            # 半透明黑幕
-            dark_surface = pg.Surface((sw, sh), pg.SRCALPHA)
-            dark_surface.fill((0, 0, 0, 160))
-            screen.blit(dark_surface, (0, 0))
+            dark = pg.Surface((sw, sh), pg.SRCALPHA)
+            dark.fill((0, 0, 0, 160))
+            screen.blit(dark, (0, 0))
 
-            # 用 SettingScene 畫上半部設定面板（Volume/Mute）＋下面三顆大按鈕
-            SettingScene.draw_panel(
-                screen,
-                self.panel_rect,
-                back_button=None,                  # 不用 SettingScene 自帶的 back
-                bottom_buttons=self.bottom_buttons  # 使用我們自訂的一列按鈕
-            )
+            if self.is_setting_open:
+                SettingScene.draw_panel(
+                    screen,
+                    self.panel_rect,
+                    back_button=None,
+                    bottom_buttons=self.bottom_buttons
+                )
 
-            # 畫右上角叉叉
+            elif self.is_bag_open:
+                BagScene.draw_panel(
+                    screen,
+                    self.panel_rect,
+                    self.game_manager.bag
+                )
+
             self.overlay_close_button.draw(screen)
 
-            # 左下角提示文字：「Press ESC to close」
-            small_font = pg.font.SysFont(None, 28)
-            hint_text = small_font.render("Press ESC to close", True, (20, 20, 20))
-            hint_x = self.panel_rect.left + 20
-            hint_y = self.panel_rect.bottom - hint_text.get_height() - 10
-            screen.blit(hint_text, (hint_x, hint_y))
+        # ====== 彈窗顯示在螢幕中央 ======
+        if self.popup_msg:
+            font = pg.font.SysFont(None, 36)
+            surf = font.render(self.popup_msg, True, (0, 0, 0))
+
+            pad_x, pad_y = 20, 10
+            w = surf.get_width() + pad_x * 2
+            h = surf.get_height() + pad_y * 2
+
+            x = GameSettings.SCREEN_WIDTH // 2 - w // 2
+            y = GameSettings.SCREEN_HEIGHT // 2 - h // 2
+
+            rect = pg.Rect(x, y, w, h)
+            pg.draw.rect(screen, (255, 255, 255), rect)
+            pg.draw.rect(screen, (0, 0, 0), rect, 2)
+            screen.blit(surf, (x + pad_x, y + pad_y))
