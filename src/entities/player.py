@@ -16,7 +16,6 @@ class Player(Entity):
 
 
     def get_rect(self) -> pg.Rect:
-        # 先用一格大小，之後覺得碰撞太大再縮
         return pg.Rect(int(self.position.x),int(self.position.y),GameSettings.TILE_SIZE,GameSettings.TILE_SIZE)  
 
 
