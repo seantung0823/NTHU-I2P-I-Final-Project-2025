@@ -174,11 +174,38 @@ class EnemyTrainer(Entity):
         # 增加 4px 讓邊碰邊也算撞到
         expanded_enemy = enemy_rect.inflate(4, 4)
 
-        self.detected = expanded_enemy.colliderect(player_rect)
+        # 先檢查有沒有「碰到」
+        if not expanded_enemy.colliderect(player_rect):
+            self.detected = False
+            self.show_confirm_dialog = False
+            return
 
-        # 玩家走開 → 關掉視窗
+        # 真的有碰到，再來判斷玩家有沒有在「面向的那一側」
+        px, py = player_rect.center
+        ex, ey = enemy_rect.center
+
+        from_front = False
+
+        # 這裡用 self.los_direction / self.direction 都可以
+        if self.los_direction == Direction.UP:
+            # 玩家在敵人上方才算
+            from_front = py < ey
+        elif self.los_direction == Direction.DOWN:
+            # 玩家在敵人下方才算
+            from_front = py > ey
+        elif self.los_direction == Direction.LEFT:
+            # 玩家在敵人左邊才算
+            from_front = px < ex
+        elif self.los_direction == Direction.RIGHT:
+            # 玩家在敵人右邊才算
+            from_front = px > ex
+
+        self.detected = from_front
+
+        # 只要條件不符合，就關掉視窗
         if not self.detected:
             self.show_confirm_dialog = False
+
 
     # -----------------------------
     # 底部提示文字
@@ -246,12 +273,16 @@ class EnemyTrainer(Entity):
     def _handle_confirm_dialog_input(self) -> None:
         # 確認：進入 battle scene
         if input_manager.key_pressed(pg.K_e) or input_manager.key_pressed(pg.K_RETURN):
-            scene_manager.change_scene("battle")  
+            # 👇 先把視窗關掉、偵測狀態清掉
+            self.show_confirm_dialog = False
+            self.detected = False
+            scene_manager.change_scene("battle")
             return
 
         # 取消：關閉視窗
         if input_manager.key_pressed(pg.K_ESCAPE):
             self.show_confirm_dialog = False
+
 
     # -----------------------------
     # Storage
