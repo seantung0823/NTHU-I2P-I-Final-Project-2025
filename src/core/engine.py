@@ -7,6 +7,8 @@ from src.scenes.menu_scene import MenuScene
 from src.scenes.game_scene import GameScene
 from src.scenes.setting_scene import SettingScene
 from src.scenes.battle_scene import BattleScene
+from src.scenes.wild_scene import WildScene
+
 
 class Engine:
 
@@ -19,21 +21,34 @@ class Engine:
 
         pg.init()
 
-        self.screen = pg.display.set_mode((GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT))
+        self.screen = pg.display.set_mode(
+            (GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT)
+        )
         self.clock = pg.time.Clock()
         self.running = True
 
         pg.display.set_caption(GameSettings.TITLE)
 
-        scene_manager.register_scene("menu", MenuScene())
-        scene_manager.register_scene("game", GameScene())
-        scene_manager.register_scene("setting", SettingScene())
-        scene_manager.register_scene("bag", SettingScene())
-        scene_manager.register_scene("battle", BattleScene())
+        # 先建立場景實例，特別是 GameScene 要留住，讓 WildScene 可以拿到同一個 Bag
+        menu_scene = MenuScene()
+        game_scene = GameScene()
+        setting_scene = SettingScene()
+        battle_scene = BattleScene()
+        # 這裡把 game_scene.game_manager.bag 傳進 WildScene
+        wild_scene = WildScene(game_scene.game_manager.bag)
+
+        scene_manager.register_scene("menu", menu_scene)
+        scene_manager.register_scene("game", game_scene)
+        scene_manager.register_scene("setting", setting_scene)
+        scene_manager.register_scene("battle", battle_scene)
+        scene_manager.register_scene("wild", wild_scene)
+
+        # 你這行原本是用 SettingScene 當 "bag" scene，其實完全沒用到可以刪掉：
+        # scene_manager.register_scene("bag", SettingScene())
+
         '''
         [TODO HACKATHON 5]
         Register the setting scene here
-        
         '''
         scene_manager.change_scene("menu")
 

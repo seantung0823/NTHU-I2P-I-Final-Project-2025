@@ -7,7 +7,7 @@ from typing import override
 
 from src.scenes.scene import Scene
 from src.utils import GameSettings
-from src.core.services import scene_manager, input_manager
+from src.core.services import scene_manager, input_manager, sound_manager
 from src.sprites import BackgroundSprite, Animation
 
 
@@ -20,7 +20,8 @@ class BattleScene(Scene):
     - 回合制戰鬥：
         PLAYER_CHOICE → PLAYER_ATTACK → ENEMY_ATTACK → PLAYER_CHOICE
     - Fight / Run 有功能
-    - Win / Run / Lose 直接回 game scene
+    - 結束時顯示 You win / You lose / Got away safely
+      約 1 秒後自動回 game scene
     """
 
     background: BackgroundSprite
@@ -80,14 +81,19 @@ class BattleScene(Scene):
         self.player_attack_power = 30
         self.enemy_attack_power = 20
 
+        # 攻擊訊息停留時間
         self.action_duration = 0.8
         self.action_timer = 0.0
 
+        # 結束畫面停留時間
+        self.end_duration = 1.0
+        self.end_timer = 0.0
+
         self.battle_result: str | None = None
 
-        # ---------- 寶可夢動畫（雙方都用 sprite1） ----------
+        # ---------- 寶可夢動畫（雙方） ----------
         self.enemy_anim = Animation(
-            "sprites/sprite1_idle.png",
+            "sprites/sprite8_idle.png",
             rows=["idle"],
             n_keyframes=4,
             size=(GameSettings.TILE_SIZE * 3, GameSettings.TILE_SIZE * 3),
@@ -129,31 +135,41 @@ class BattleScene(Scene):
         self.enemy_hp = self.enemy_max_hp
         self.battle_result = None
         self.action_timer = 0.0
+        self.end_timer = 0.0
+
+        # 播戰鬥 BGM
+        sound_manager.play_bgm("RBY 107 Battle! (Trainer).ogg")
 
     # -------------------------------------------------
     # Update
     # -------------------------------------------------
     @override
     def update(self, dt: float) -> None:
-        self.enemy_anim.update(dt)
-        self.player_anim.update(dt)
+        # 這裡把動畫用到的 dt clamp 起來，避免第一次進場 dt 超大
+        step = min(dt, 0.05)
+
+        self.enemy_anim.update(step)
+        self.player_anim.update(step)
 
         # ---------- 前置動畫 ----------
         if self.phase == "RADIAL":
-            self.transition_timer += dt
+            self.transition_timer += step
             if self.transition_timer >= self.transition_duration:
+                self.transition_timer = self.transition_duration
                 self.phase = "ENEMY_ZOOM"
             return
 
         if self.phase == "ENEMY_ZOOM":
-            self.enemy_zoom_timer += dt
+            self.enemy_zoom_timer += step
             if self.enemy_zoom_timer >= self.enemy_zoom_duration:
+                self.enemy_zoom_timer = self.enemy_zoom_duration
                 self.phase = "PLAYER_ZOOM"
             return
 
         if self.phase == "PLAYER_ZOOM":
-            self.player_zoom_timer += dt
+            self.player_zoom_timer += step
             if self.player_zoom_timer >= self.player_zoom_duration:
+                self.player_zoom_timer = self.player_zoom_duration
                 self.phase = "PLAYER_CHOICE"
                 self.message = self.message_menu
             return
@@ -165,13 +181,15 @@ class BattleScene(Scene):
 
         # ---------- 玩家攻擊 ----------
         if self.phase == "PLAYER_ATTACK":
-            self.action_timer += dt
+            self.action_timer += step
             if self.action_timer >= self.action_duration:
                 self.action_timer = 0.0
 
                 if self.enemy_hp <= 0:
                     self.battle_result = "WIN"
+                    self.message = "You win!"
                     self.phase = "END"
+                    self.end_timer = 0.0
                     return
 
                 self._start_enemy_attack()
@@ -179,28 +197,33 @@ class BattleScene(Scene):
 
         # ---------- 敵人攻擊 ----------
         if self.phase == "ENEMY_ATTACK":
-            self.action_timer += dt
+            self.action_timer += step
             if self.action_timer >= self.action_duration:
                 self.action_timer = 0.0
 
                 if self.player_hp <= 0:
                     self.battle_result = "LOSE"
+                    self.message = "You lose..."
                     self.phase = "END"
+                    self.end_timer = 0.0
                     return
 
                 self.phase = "PLAYER_CHOICE"
                 self.message = self.message_menu
             return
 
-        # ---------- 結束戰鬥：直接回到 game_scene ----------
+        # ---------- 結束戰鬥：顯示結果，約 1 秒後自動回到 game_scene ----------
         if self.phase == "END":
-            scene_manager.change_scene("game")
+            self.end_timer += step
+            if self.end_timer >= self.end_duration:
+                scene_manager.change_scene("game")
             return
 
     # -------------------------------------------------
     # 玩家選擇回合
     # -------------------------------------------------
     def _handle_player_choice(self) -> None:
+        # F = Fight, R = Run
         if input_manager.key_pressed(pg.K_f):
             self._player_attack()
             return
@@ -209,6 +232,7 @@ class BattleScene(Scene):
             self._player_run()
             return
 
+        # 滑鼠點選按鈕
         if input_manager.mouse_pressed(pg.BUTTON_LEFT):
             mx, my = input_manager.mouse_pos
             for rect, label in self._get_menu_buttons():
@@ -217,6 +241,7 @@ class BattleScene(Scene):
                         self._player_attack()
                     elif label == "Run":
                         self._player_run()
+                    # Item / Switch 目前沒功能
                     return
 
     def _player_attack(self) -> None:
@@ -247,6 +272,7 @@ class BattleScene(Scene):
         self.battle_result = "RUN"
         self.message = "Got away safely!"
         self.phase = "END"
+        self.end_timer = 0.0
 
     # -------------------------------------------------
     # Draw
@@ -295,7 +321,10 @@ class BattleScene(Scene):
 
         # 玩家 HP
         player_rect = pg.Rect(
-            20, GameSettings.SCREEN_HEIGHT - self.dialog_height - box_h - 10, box_w, box_h
+            20,
+            GameSettings.SCREEN_HEIGHT - self.dialog_height - box_h - 10,
+            box_w,
+            box_h,
         )
         pg.draw.rect(screen, (255, 255, 255), player_rect)
         pg.draw.rect(screen, (0, 0, 0), player_rect, 2)
@@ -304,9 +333,19 @@ class BattleScene(Scene):
         screen.blit(pname_text, (player_rect.x + 8, player_rect.y + 8))
 
         p_hp_ratio = self.player_hp / self.player_max_hp
-        p_bar_back = pg.Rect(player_rect.x + 8, player_rect.y + box_h - 20, box_w - 16, 10)
+        p_bar_back = pg.Rect(
+            player_rect.x + 8,
+            player_rect.y + box_h - 20,
+            box_w - 16,
+            10,
+        )
         pg.draw.rect(screen, (80, 80, 80), p_bar_back)
-        p_bar = pg.Rect(p_bar_back.x, p_bar_back.y, int(p_bar_back.w * p_hp_ratio), 10)
+        p_bar = pg.Rect(
+            p_bar_back.x,
+            p_bar_back.y,
+            int(p_bar_back.w * p_hp_ratio),
+            10,
+        )
         pg.draw.rect(screen, (0, 200, 0), p_bar)
 
     # -------------------------------------------------
@@ -332,18 +371,31 @@ class BattleScene(Scene):
             player_scale = self.player_scale_end
 
         if enemy_scale > 0:
-            self._draw_scaled_animation(screen, self.enemy_anim, self.enemy_pos, enemy_scale)
+            self._draw_scaled_animation(
+                screen, self.enemy_anim, self.enemy_pos, enemy_scale
+            )
 
         if player_scale > 0:
-            self._draw_scaled_animation(screen, self.player_anim, self.player_pos, player_scale)
+            self._draw_scaled_animation(
+                screen, self.player_anim, self.player_pos, player_scale
+            )
 
-    def _draw_scaled_animation(self, screen, anim, center, scale):
+    def _draw_scaled_animation(
+        self,
+        screen: pg.Surface,
+        anim: Animation,
+        center: tuple[int, int],
+        scale: float,
+    ) -> None:
         frames = anim.animations[anim.cur_row]
         idx = int((anim.accumulator / anim.loop) * anim.n_keyframes) % anim.n_keyframes
         frame = frames[idx]
 
         w, h = frame.get_size()
-        surf = pg.transform.smoothscale(frame, (int(w * scale), int(h * scale)))
+        surf = pg.transform.smoothscale(
+            frame,
+            (int(w * scale), int(h * scale)),
+        )
         rect = surf.get_rect(center=center)
         screen.blit(surf, rect)
 
@@ -360,14 +412,14 @@ class BattleScene(Scene):
         x_start = (GameSettings.SCREEN_WIDTH - total_width) // 2
         y = self.dialog_rect.top + 60
 
-        out = []
+        out: list[tuple[pg.Rect, str]] = []
         for i, label in enumerate(labels):
             rect = pg.Rect(x_start + i * (btn_w + gap), y, btn_w, btn_h)
             out.append((rect, label))
 
         return out
 
-    def _draw_menu_buttons(self, screen):
+    def _draw_menu_buttons(self, screen: pg.Surface) -> None:
         for rect, label in self._get_menu_buttons():
             pg.draw.rect(screen, (230, 215, 190), rect)
             pg.draw.rect(screen, (0, 0, 0), rect, 2)

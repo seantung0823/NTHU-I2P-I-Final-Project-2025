@@ -78,7 +78,6 @@ class BagScene(Scene):
                 BagScene._show_no_item_popup = True
             else:
                 # 這裡可以依照你自己的邏輯去扣道具 / 回血
-                # 先留一行提示，避免直接動到你的資料結構
                 print("[BagScene] Potion clicked. TODO: implement heal & decrease count.")
 
     # -------------------------------------------------
@@ -139,79 +138,83 @@ class BagScene(Scene):
 
         max_show = min(len(monsters), 6)
 
-        for idx in range(max_show):
-            monster = monsters[idx]
+        if max_show == 0:
+            no_mon_text = small_font.render("No Pokemon", True, (100, 100, 100))
+            screen.blit(no_mon_text, (card_x, content_top + 12))
+        else:
+            for idx in range(max_show):
+                monster = monsters[idx]
 
-            card_y = content_top + 8 + idx * (card_height + vertical_gap)
-            card_rect = pg.Rect(card_x, card_y, card_width, card_height)
+                card_y = content_top + 8 + idx * (card_height + vertical_gap)
+                card_rect = pg.Rect(card_x, card_y, card_width, card_height)
 
-            # 繪製卡片 Banner
-            if banner_surf_raw:
-                screen.blit(banner_surf_raw, card_rect.topleft)
-            else:
-                pg.draw.rect(screen, (250, 250, 250), card_rect, border_radius=4)
-                pg.draw.rect(screen, (120, 120, 120), card_rect, 2, border_radius=4)
+                # 繪製卡片 Banner
+                if banner_surf_raw:
+                    screen.blit(banner_surf_raw, card_rect.topleft)
+                else:
+                    pg.draw.rect(screen, (250, 250, 250), card_rect, border_radius=4)
+                    pg.draw.rect(screen, (120, 120, 120), card_rect, 2, border_radius=4)
 
-            # 寶可夢頭像（往下調 2px，比較居中）
-            icon_y = card_rect.top + (card_height - icon_size) // 2 - 6
-            icon_rect = pg.Rect(
-                card_rect.left + 16,
-                icon_y,
-                icon_size,
-                icon_size
-            )
+                # 寶可夢頭像（往下調 6px，比較居中）
+                icon_y = card_rect.top + (card_height - icon_size) // 2 - 6
+                icon_rect = pg.Rect(
+                    card_rect.left + 16,
+                    icon_y,
+                    icon_size,
+                    icon_size
+                )
 
-            sprite_rel = monster.get("sprite_path", "")
-            sprite_path = (
-                f"assets/images/{sprite_rel}"
-                if sprite_rel
-                else BagScene.DEFAULT_MONSTER_SPRITE
-            )
-            icon_surf = BagScene._load_image(sprite_path, (icon_size, icon_size))
-            if icon_surf:
-                screen.blit(icon_surf, icon_rect)
-            else:
-                pg.draw.rect(screen, (200, 200, 200), icon_rect)
+                sprite_rel = monster.get("sprite_path", "")
+                sprite_path = (
+                    f"assets/images/{sprite_rel}"
+                    if sprite_rel
+                    else BagScene.DEFAULT_MONSTER_SPRITE
+                )
+                icon_surf = BagScene._load_image(sprite_path, (icon_size, icon_size))
+                if icon_surf:
+                    screen.blit(icon_surf, icon_rect)
+                else:
+                    pg.draw.rect(screen, (200, 200, 200), icon_rect)
 
-            # 名稱
-            name = monster.get("name", "???")
-            name_text = small_font.render(str(name), True, (30, 30, 30))
-            screen.blit(name_text, (icon_rect.right + 10, card_rect.top + 8))
+                # 名稱
+                name = monster.get("name", "???")
+                name_text = small_font.render(str(name), True, (30, 30, 30))
+                screen.blit(name_text, (icon_rect.right + 10, card_rect.top + 8))
 
-            # 等級
-            level = monster.get("level", 1)
-            lv_text = mini_font.render(f"Lv.{level}", True, (30, 30, 30))
-            screen.blit(
-                lv_text,
-                (card_rect.right - lv_text.get_width() - 10, card_rect.top + 6),
-            )
+                # 等級
+                level = monster.get("level", 1)
+                lv_text = mini_font.render(f"Lv.{level}", True, (30, 30, 30))
+                screen.blit(
+                    lv_text,
+                    (card_rect.right - lv_text.get_width() - 10, card_rect.top + 6),
+                )
 
-            # HP Bar
-            hp = monster.get("hp", 0)
-            max_hp = monster.get("max_hp", max(hp, 1))
-            ratio = max(0.0, min(1.0, hp / max_hp))
+                # HP Bar
+                hp = monster.get("hp", 0)
+                max_hp = monster.get("max_hp", max(hp, 1))
+                ratio = max(0.0, min(1.0, hp / max_hp))
 
-            bar_width = card_rect.width - (icon_rect.width + 10 + 20)
-            bar_height = 12
-            bar_x = icon_rect.right + 10
-            bar_y = card_rect.bottom - 12 - bar_height
+                bar_width = card_rect.width - (icon_rect.width + 10 + 20)
+                bar_height = 12
+                bar_x = icon_rect.right + 10
+                bar_y = card_rect.bottom - 12 - bar_height
 
-            bar_rect = pg.Rect(bar_x, bar_y, bar_width, bar_height)
-            pg.draw.rect(screen, (0, 0, 0), bar_rect, 1)
+                bar_rect = pg.Rect(bar_x, bar_y, bar_width, bar_height)
+                pg.draw.rect(screen, (0, 0, 0), bar_rect, 1)
 
-            inner_rect = bar_rect.inflate(-2, -2)
-            filled_rect = inner_rect.copy()
-            filled_rect.width = int(inner_rect.width * ratio)
-            pg.draw.rect(screen, (86, 176, 66), filled_rect)
+                inner_rect = bar_rect.inflate(-2, -2)
+                filled_rect = inner_rect.copy()
+                filled_rect.width = int(inner_rect.width * ratio)
+                pg.draw.rect(screen, (86, 176, 66), filled_rect)
 
-            hp_text = mini_font.render(f"{hp}/{max_hp}", True, (20, 20, 20))
-            screen.blit(
-                hp_text,
-                (
-                    bar_rect.centerx - hp_text.get_width() // 2,
-                    bar_rect.centery - hp_text.get_height() // 2,
-                ),
-            )
+                hp_text = mini_font.render(f"{hp}/{max_hp}", True, (20, 20, 20))
+                screen.blit(
+                    hp_text,
+                    (
+                        bar_rect.centerx - hp_text.get_width() // 2,
+                        bar_rect.centery - hp_text.get_height() // 2,
+                    ),
+                )
 
         # -------------------------------------------------
         # 右邊：道具列表（圖示 + 名稱 + 數量）

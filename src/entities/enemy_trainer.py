@@ -30,6 +30,10 @@ class EnemyTrainer(Entity):
     los_direction: Direction
     show_confirm_dialog: bool  # 是否顯示確認視窗
 
+    # 兩個按鈕的 hitbox（給滑鼠點擊用）
+    _confirm_rect: pg.Rect | None
+    _cancel_rect: pg.Rect | None
+
     @override
     def __init__(
         self,
@@ -40,6 +44,7 @@ class EnemyTrainer(Entity):
         max_tiles: int | None = 2,
         facing: Direction | None = None,
     ) -> None:
+
         super().__init__(x, y, game_manager)
 
         self.classification = classification
@@ -67,6 +72,10 @@ class EnemyTrainer(Entity):
 
         self.detected = False
         self.show_confirm_dialog = False
+
+        # 一開始沒有按鈕 hitbox
+        self._confirm_rect = None
+        self._cancel_rect = None
 
     # -----------------------------
     # 設定敵人面向 & 對應動畫
@@ -138,7 +147,7 @@ class EnemyTrainer(Entity):
             if not self.show_confirm_dialog:
                 self._draw_interact_hint(screen)
 
-        # 顯示確認視窗
+        # 顯示確認視窗（實際上 GameScene 最後還會再畫一次蓋在最上層）
         if self.show_confirm_dialog:
             self._draw_confirm_dialog(screen)
 
@@ -206,7 +215,6 @@ class EnemyTrainer(Entity):
         if not self.detected:
             self.show_confirm_dialog = False
 
-
     # -----------------------------
     # 底部提示文字
     # -----------------------------
@@ -222,67 +230,131 @@ class EnemyTrainer(Entity):
         screen.blit(text, (bg_rect.x + 8, bg_rect.y + 4))
 
     # -----------------------------
-    # 確認視窗
+    # 確認視窗（畫面 + 按鈕 hitbox）
     # -----------------------------
     def _draw_confirm_dialog(self, screen: pg.Surface) -> None:
         panel_w, panel_h = 260, 130
         panel_rect = pg.Rect(0, 0, panel_w, panel_h)
-        panel_rect.center = (GameSettings.SCREEN_WIDTH // 2, GameSettings.SCREEN_HEIGHT // 2)
+        panel_rect.center = (
+            GameSettings.SCREEN_WIDTH // 2,
+            GameSettings.SCREEN_HEIGHT // 2,
+        )
 
         # 半透明背景
-        overlay = pg.Surface((GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT), pg.SRCALPHA)
+        overlay = pg.Surface(
+            (GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT),
+            pg.SRCALPHA,
+        )
         overlay.fill((0, 0, 0, 100))
         screen.blit(overlay, (0, 0))
 
-        # 視窗
+        # 視窗本體
         pg.draw.rect(screen, (30, 30, 30), panel_rect)
         pg.draw.rect(screen, (255, 255, 255), panel_rect, 2)
 
         font = pg.font.SysFont(None, 22)
-        text = font.render("Enter battle with this trainer?", True, (255, 255, 255))
-        screen.blit(text, text.get_rect(center=(panel_rect.centerx, panel_rect.y + 35)))
+        small_font = pg.font.SysFont(None, 18)
 
-        # 按鈕區（僅顯示外觀，實際用鍵盤操作）
-        btn_w, btn_h = 90, 32
+        title = font.render("Enter battle with this trainer?", True, (255, 255, 255))
+        screen.blit(
+            title,
+            title.get_rect(center=(panel_rect.centerx, panel_rect.y + 35)),
+        )
+
+        # ===== 按鈕寬度根據文字自動算，保證左右有 padding =====
+        txt_confirm = font.render("Confirm", True, (255, 255, 255))
+        hint_confirm = small_font.render("(E)", True, (255, 255, 255))
+        confirm_width = max(txt_confirm.get_width(), hint_confirm.get_width())
+
+        txt_cancel = font.render("Cancel", True, (255, 255, 255))
+        hint_cancel = small_font.render("(Esc)", True, (255, 255, 255))
+        cancel_width = max(txt_cancel.get_width(), hint_cancel.get_width())
+
+        # 兩個裡面挑最寬的，再加左右 padding
+        content_w = max(confirm_width, cancel_width)
+        btn_w = content_w + 20  # 左右各 10px padding
+        btn_h = 34
         gap = 20
 
         btn_confirm = pg.Rect(0, 0, btn_w, btn_h)
         btn_cancel = pg.Rect(0, 0, btn_w, btn_h)
 
-        btn_confirm.center = (panel_rect.centerx - (btn_w // 2 + gap // 2), panel_rect.y + 90)
-        btn_cancel.center = (panel_rect.centerx + (btn_w // 2 + gap // 2), panel_rect.y + 90)
-
-        pg.draw.rect(screen, (70, 70, 70), btn_confirm)
-        pg.draw.rect(screen, (255, 255, 255), btn_confirm, 2)
-        pg.draw.rect(screen, (70, 70, 70), btn_cancel)
-        pg.draw.rect(screen, (255, 255, 255), btn_cancel, 2)
-
-        screen.blit(
-            font.render("Confirm (E)", True, (255, 255, 255)),
-            font.render("Confirm (E)", True, (255, 255, 255)).get_rect(center=btn_confirm.center),
+        btn_confirm.center = (
+            panel_rect.centerx - (btn_w // 2 + gap // 2),
+            panel_rect.y + 90,
+        )
+        btn_cancel.center = (
+            panel_rect.centerx + (btn_w // 2 + gap // 2),
+            panel_rect.y + 90,
         )
 
+        # 畫按鈕框
+        for rect in (btn_confirm, btn_cancel):
+            pg.draw.rect(screen, (70, 70, 70), rect)
+            pg.draw.rect(screen, (255, 255, 255), rect, 2)
+
+        # Confirm 按鈕文字（兩行）
         screen.blit(
-            font.render("Cancel (Esc)", True, (255, 255, 255)),
-            font.render("Cancel (Esc)", True, (255, 255, 255)).get_rect(center=btn_cancel.center),
+            txt_confirm,
+            txt_confirm.get_rect(
+                center=(btn_confirm.centerx, btn_confirm.centery - 6)
+            ),
         )
+        screen.blit(
+            hint_confirm,
+            hint_confirm.get_rect(
+                center=(btn_confirm.centerx, btn_confirm.centery + 8)
+            ),
+        )
+
+        # Cancel 按鈕文字（兩行）
+        screen.blit(
+            txt_cancel,
+            txt_cancel.get_rect(
+                center=(btn_cancel.centerx, btn_cancel.centery - 6)
+            ),
+        )
+        screen.blit(
+            hint_cancel,
+            hint_cancel.get_rect(
+                center=(btn_cancel.centerx, btn_cancel.centery + 8)
+            ),
+        )
+
+        # 把這兩個 rect 存起來，給滑鼠點擊用
+        self._confirm_rect = btn_confirm
+        self._cancel_rect = btn_cancel
 
     # -----------------------------
-    # 視窗輸入處理（確認 / 取消）
+    # 視窗輸入處理（鍵盤 + 滑鼠）
     # -----------------------------
     def _handle_confirm_dialog_input(self) -> None:
-        # 確認：進入 battle scene
+        # 鍵盤：確認 → E 或 Enter
         if input_manager.key_pressed(pg.K_e) or input_manager.key_pressed(pg.K_RETURN):
-            # 👇 先把視窗關掉、偵測狀態清掉
             self.show_confirm_dialog = False
             self.detected = False
             scene_manager.change_scene("battle")
             return
 
-        # 取消：關閉視窗
+        # 鍵盤：取消 → Esc
         if input_manager.key_pressed(pg.K_ESCAPE):
             self.show_confirm_dialog = False
+            return
 
+        # 滑鼠左鍵點擊
+        mouse_buttons = pg.mouse.get_pressed()
+        if mouse_buttons[0]:
+            mx, my = pg.mouse.get_pos()
+
+            if self._confirm_rect and self._confirm_rect.collidepoint(mx, my):
+                self.show_confirm_dialog = False
+                self.detected = False
+                scene_manager.change_scene("battle")
+                return
+
+            if self._cancel_rect and self._cancel_rect.collidepoint(mx, my):
+                self.show_confirm_dialog = False
+                return
 
     # -----------------------------
     # Storage

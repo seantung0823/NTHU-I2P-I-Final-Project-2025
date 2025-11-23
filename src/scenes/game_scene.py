@@ -1,3 +1,5 @@
+# src/scenes/game_scene.py
+
 import pygame as pg
 import threading
 import time
@@ -12,6 +14,7 @@ from src.scenes.setting_scene import SettingScene
 from typing import override
 
 from src.scenes.bag_scene import BagScene
+from src.scenes.wild_scene import WildScene  # ★ 新增匯入
 
 import pytmx
 
@@ -31,7 +34,7 @@ class GameScene(Scene):
     # 背包相關
     bag_button: Button
     is_bag_open: bool
-    
+
     def __init__(self):
         super().__init__()
         # Game Manager
@@ -40,7 +43,7 @@ class GameScene(Scene):
             Logger.error("Failed to load game manager")
             exit(1)
         self.game_manager = manager
-        
+
         # Online Manager
         if GameSettings.IS_ONLINE:
             self.online_manager = OnlineManager()
@@ -53,11 +56,11 @@ class GameScene(Scene):
 
         # ====== 彈窗狀態 ======
         self.popup_msg: str | None = None
-        self.popup_timer: float = 0.0  # 倒數 2 秒
+        self.popup_timer: float = 0.0  # 倒數 1 秒
 
-        # ====== 設定 overlay 狀態 ======
+        # ====== 設定 / 背包 overlay 狀態 ======
         self.is_setting_open = False
-        self.is_bag_open = False  
+        self.is_bag_open = False
 
         sw, sh = GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT
 
@@ -133,12 +136,14 @@ class GameScene(Scene):
             lambda: self.close_all_overlays()
         )
 
+        # ====== Bush / 野生寶可夢狀態 ======
+        # 上一幀玩家是否站在 PokemonBush 草叢上
+        self._was_on_bush: bool = False
 
     # ====== 彈窗功能 ======
     def show_popup(self, msg: str):
         self.popup_msg = msg
         self.popup_timer = 1.0
-
 
     # ====== 存檔 / 讀檔 ======
     def save_game(self):
@@ -150,13 +155,12 @@ class GameScene(Scene):
         manager = GameManager.load("saves/backup.json")
         if manager is None:
             Logger.error("Failed to load backup")
-            self.show_popup("Load Successful")
+            self.show_popup("Load Failed")
             return
 
         self.game_manager = manager
         Logger.info("Game loaded from saves/backup.json")
         self.show_popup("Loaded!")
-
 
     # ====== Overlay 開關 ======
     def close_all_overlays(self):
@@ -171,19 +175,18 @@ class GameScene(Scene):
         self.is_bag_open = True
         self.is_setting_open = False
 
-
     @override
     def enter(self) -> None:
         self.close_all_overlays()
         sound_manager.play_bgm("RBY 103 Pallet Town.ogg")
         if self.online_manager:
             self.online_manager.enter()
-        
+
     @override
     def exit(self) -> None:
         if self.online_manager:
             self.online_manager.exit()
-        
+
     @override
     def update(self, dt: float):
 
@@ -218,27 +221,29 @@ class GameScene(Scene):
 
             self.overlay_close_button.update(dt)
             return
-        
+
         # ====== 原本遊戲邏輯 ======
         if self.game_manager.player:
             self.game_manager.player.update(dt)
+            # 玩家移動完後檢查是否踩在 PokemonBush 上
+            self._update_bush_state()
 
         for enemy in self.game_manager.current_enemy_trainers:
             enemy.update(dt)
-            
+
         self.game_manager.bag.update(dt)
-        
+
         if self.game_manager.player and self.online_manager:
             self.online_manager.update(
                 self.game_manager.player.position.x,
                 self.game_manager.player.position.y,
                 self.game_manager.current_map.path_name
             )
-        
+
         self.game_manager.try_switch_map()
-        
+
     @override
-    def draw(self, screen: pg.Surface):        
+    def draw(self, screen: pg.Surface):
 
         # camera
         if self.game_manager.player:
@@ -246,21 +251,21 @@ class GameScene(Scene):
         else:
             camera = PositionCamera(0, 0)
 
-        # 地圖
+        # ===== 地圖 =====
         self.game_manager.current_map.draw(screen, camera)
 
-        # 玩家
+        # ===== 玩家 =====
         if self.game_manager.player:
             self.game_manager.player.draw(screen, camera)
 
-        # 敵人
+        # ===== 敵人 =====
         for enemy in self.game_manager.current_enemy_trainers:
             enemy.draw(screen, camera)
 
-        # 背包
+        # ===== 背包（玩家 UI）=====
         self.game_manager.bag.draw(screen)
 
-        # 線上玩家
+        # ===== 線上玩家 =====
         if self.online_manager and self.game_manager.player:
             list_online = self.online_manager.get_list_players()
             for player in list_online:
@@ -271,11 +276,11 @@ class GameScene(Scene):
                     self.sprite_online.update_pos(pos)
                     self.sprite_online.draw(screen)
 
-        # 右上角 UI
+        # ===== 右上角按鈕 =====
         self.setting_button.draw(screen)
         self.bag_button.draw(screen)
 
-        # ====== overlay 顯示 ======
+        # ====== overlay 覆蓋層 ======
         if self.is_setting_open or self.is_bag_open:
             sw, sh = GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT
 
@@ -300,7 +305,12 @@ class GameScene(Scene):
 
             self.overlay_close_button.draw(screen)
 
-        # ====== 彈窗顯示在螢幕中央 ======
+        # ====== 把敵人確認視窗畫在最上面 !!! ======
+        for enemy in self.game_manager.current_enemy_trainers:
+            if hasattr(enemy, "show_confirm_dialog") and enemy.show_confirm_dialog:
+                enemy._draw_confirm_dialog(screen)
+
+        # ====== 彈窗（popup）=====
         if self.popup_msg:
             font = pg.font.SysFont(None, 36)
             surf = font.render(self.popup_msg, True, (0, 0, 0))
@@ -316,3 +326,50 @@ class GameScene(Scene):
             pg.draw.rect(screen, (255, 255, 255), rect)
             pg.draw.rect(screen, (0, 0, 0), rect, 2)
             screen.blit(surf, (x + pad_x, y + pad_y))
+
+    # ====== Bush / Pokemon 草叢偵測 ======
+    def _is_player_on_bush_tile(self) -> bool:
+        """回傳玩家現在這一格是不是 PokemonBush 圖層的草叢"""
+        player = self.game_manager.player
+        if player is None:
+            return False
+
+        tmx = self.game_manager.current_map.tmxdata
+
+        # 找到 Tiled 裡的 PokemonBush 圖層
+        try:
+            bush_layer = tmx.get_layer_by_name("PokemonBush")
+        except ValueError:
+            # 地圖沒有這個圖層就直接略過
+            return False
+
+        # 只處理 TileLayer
+        if not isinstance(bush_layer, pytmx.TiledTileLayer):
+            return False
+
+        # 以玩家中心點算 tile 座標
+        px = player.position.x + GameSettings.TILE_SIZE / 2
+        py = player.position.y + GameSettings.TILE_SIZE / 2
+        tile_x = int(px // GameSettings.TILE_SIZE)
+        tile_y = int(py // GameSettings.TILE_SIZE)
+
+        # 邊界檢查
+        if tile_x < 0 or tile_y < 0 or tile_x >= tmx.width or tile_y >= tmx.height:
+            return False
+
+        # 在該圖層取出這一格的 gid，0 代表沒有放 tile
+        gid = bush_layer.data[tile_y][tile_x]
+        return gid != 0
+
+    def _update_bush_state(self) -> None:
+        """偵測玩家是否剛踏進 / 離開草叢，踏進去就進 wild 戰鬥"""
+        on_bush = self._is_player_on_bush_tile()
+
+        # 剛踏進草叢的一瞬間（上一幀不在，這一幀在）
+        if on_bush and not self._was_on_bush:
+            Logger.info("Player stepped into PokemonBush")
+            # ★ 每次進 Wild，都用「目前這一份 bag」建立 WildScene
+            scene_manager.register_scene("wild", WildScene(self.game_manager.bag))
+            scene_manager.change_scene("wild")
+
+        self._was_on_bush = on_bush
