@@ -117,7 +117,7 @@ class SettingScene(Scene):
 
     @override
     def update(self, dt: float) -> None:
-        # ESC 回主選單
+        # 回主選單
         if input_manager.key_pressed(pg.K_ESCAPE):
             scene_manager.change_scene("menu")
             return

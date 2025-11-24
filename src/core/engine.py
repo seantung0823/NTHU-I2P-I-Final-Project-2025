@@ -33,7 +33,8 @@ class Engine:
         menu_scene = MenuScene()
         game_scene = GameScene()
         setting_scene = SettingScene()
-        battle_scene = BattleScene()
+        
+        battle_scene = BattleScene(game_scene.game_manager.bag)
         # 這裡把 game_scene.game_manager.bag 傳進 WildScene
         wild_scene = WildScene(game_scene.game_manager.bag)
 
