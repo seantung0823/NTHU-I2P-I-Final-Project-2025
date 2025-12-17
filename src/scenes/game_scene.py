@@ -1,8 +1,9 @@
 # src/scenes/game_scene.py
 
 import pygame as pg
-import threading
-import time
+import pytmx
+
+from typing import override
 
 from src.scenes.scene import Scene
 from src.core import GameManager, OnlineManager
@@ -11,32 +12,106 @@ from src.core.services import sound_manager, scene_manager
 from src.sprites import Sprite
 from src.interface.components import Button
 from src.scenes.setting_scene import SettingScene
-from typing import override
-
 from src.scenes.bag_scene import BagScene
-from src.scenes.wild_scene import WildScene  # ★ 新增匯入
+from src.scenes.wild_scene import WildScene
+from src.scenes.shop_scene import ShopScene
 
-import pytmx
+
+# =========================
+#        SHOP OVERLAY
+# =========================
+class ShopOverlay:
+    def __init__(self, bag, shop_id: str = "default"):
+        self.bag = bag
+        self.shop_id = shop_id
+
+        self.open = True
+        self.tab = "buy"   # "buy" / "sell"
+        self.msg = ""
+
+        # edge triggers（不靠 event loop）
+        self._prev_mouse_down = False
+        self._prev_esc = False
+
+    def update(self, dt: float) -> None:
+        if not self.open:
+            return
+
+        # ESC edge：關閉
+        keys = pg.key.get_pressed()
+        esc_now = bool(keys[pg.K_ESCAPE])
+        if esc_now and (not self._prev_esc):
+            self.open = False
+            self._prev_esc = esc_now
+            return
+        self._prev_esc = esc_now
+
+        # Mouse left click edge：交給 ShopScene
+        mouse_down = bool(pg.mouse.get_pressed(num_buttons=3)[0])
+        if mouse_down and (not self._prev_mouse_down):
+            mouse_pos = pg.mouse.get_pos()
+            new_tab, msg = ShopScene.handle_click(
+                mouse_pos,
+                self.bag,
+                self.shop_id,
+                self.tab,
+            )
+            self.tab = new_tab
+
+            if msg == "__CLOSE__":
+                self.open = False
+            elif msg:
+                self.msg = msg
+
+        self._prev_mouse_down = mouse_down
+
+    def draw(self, screen: pg.Surface) -> None:
+        if not self.open:
+            return
+
+        veil = pg.Surface((GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT), pg.SRCALPHA)
+        veil.fill((0, 0, 0, 120))
+        screen.blit(veil, (0, 0))
+
+        panel_rect = pg.Rect(
+            80, 60,
+            GameSettings.SCREEN_WIDTH - 160,
+            GameSettings.SCREEN_HEIGHT - 120,
+        )
+
+        ShopScene.draw_panel(screen, panel_rect, self.bag, self.shop_id, self.tab)
+
+        # 顯示操作訊息（Purchased / Sold / Not enough coins）
+        if self.msg:
+            font = pg.font.SysFont(None, 26, bold=True)
+            text = font.render(self.msg, True, (255, 255, 255))
+            screen.blit(text, (panel_rect.left + 20, panel_rect.bottom + 8 - text.get_height()))
 
 
+# =========================
+#           SCENE
+# =========================
 class GameScene(Scene):
     game_manager: GameManager
     online_manager: OnlineManager | None
     sprite_online: Sprite
 
-    # 設定相關
     setting_button: Button
     overlay_close_button: Button
     bottom_buttons: list[Button]
     is_setting_open: bool
     panel_rect: pg.Rect
 
-    # 背包相關
     bag_button: Button
     is_bag_open: bool
 
+    # shop overlay
+    is_shop_open: bool
+    shop_overlay: ShopOverlay | None
+
     def __init__(self):
         super().__init__()
+
         # Game Manager
         manager = GameManager.load("saves/game0.json")
         if manager is None:
@@ -49,28 +124,31 @@ class GameScene(Scene):
             self.online_manager = OnlineManager()
         else:
             self.online_manager = None
+
         self.sprite_online = Sprite(
             "ingame_ui/options1.png",
             (GameSettings.TILE_SIZE, GameSettings.TILE_SIZE)
         )
 
-        # ====== 彈窗狀態 ======
+        # ====== popup ======
         self.popup_msg: str | None = None
-        self.popup_timer: float = 0.0  # 倒數 1 秒
+        self.popup_timer: float = 0.0
 
-        # ====== 設定 / 背包 overlay 狀態 ======
+        # ====== overlays ======
         self.is_setting_open = False
         self.is_bag_open = False
 
+        self.is_shop_open = False
+        self.shop_overlay = None
+
         sw, sh = GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT
 
-        # 右上角兩顆按鈕：背包在左、設定在右
+        # 右上角：背包 / 設定
         btn_size_top = 60
         margin_top = 16
         margin_right = 16
         gap_top = 10
 
-        # 設定按鈕（最右邊）
         self.setting_button = Button(
             "UI/button_setting.png", "UI/button_setting_hover.png",
             sw - margin_right - btn_size_top,
@@ -79,7 +157,6 @@ class GameScene(Scene):
             lambda: self.open_setting_overlay()
         )
 
-        # 背包按鈕（在設定左邊）
         self.bag_button = Button(
             "UI/button_backpack.png", "UI/button_backpack_hover.png",
             sw - margin_right - btn_size_top * 2 - gap_top,
@@ -88,7 +165,7 @@ class GameScene(Scene):
             lambda: self.open_bag_overlay()
         )
 
-        # 設定／背包共用的面板
+        # 共用面板
         wid_mid, hig_mid = sw // 2, sh // 2
         self.panel_rect = pg.Rect(
             wid_mid - 480 // 2,
@@ -96,7 +173,7 @@ class GameScene(Scene):
             480, 420
         )
 
-        # 下方一排三顆按鈕：Save / Load / Menu
+        # Save / Load / Menu
         btn_size = 80
         gap = 20
         start_x = self.panel_rect.left + 40
@@ -136,16 +213,18 @@ class GameScene(Scene):
             lambda: self.close_all_overlays()
         )
 
-        # ====== Bush / 野生寶可夢狀態 ======
-        # 上一幀玩家是否站在 PokemonBush 草叢上
+        # ====== Bush / wild state ======
         self._was_on_bush: bool = False
 
-    # ====== 彈窗功能 ======
+        # E edge trigger（給 ShopNPC 互動用）
+        self._prev_e: bool = False
+
+    # ====== popup ======
     def show_popup(self, msg: str):
         self.popup_msg = msg
         self.popup_timer = 1.0
 
-    # ====== 存檔 / 讀檔 ======
+    # ====== save/load ======
     def save_game(self):
         self.game_manager.save("saves/backup.json")
         Logger.info("Game saved to saves/backup.json")
@@ -162,18 +241,31 @@ class GameScene(Scene):
         Logger.info("Game loaded from saves/backup.json")
         self.show_popup("Loaded!")
 
-    # ====== Overlay 開關 ======
+    # ====== overlay control ======
     def close_all_overlays(self):
         self.is_setting_open = False
         self.is_bag_open = False
 
+        self.is_shop_open = False
+        self.shop_overlay = None
+
     def open_setting_overlay(self):
         self.is_setting_open = True
         self.is_bag_open = False
+        self.is_shop_open = False
+        self.shop_overlay = None
 
     def open_bag_overlay(self):
         self.is_bag_open = True
         self.is_setting_open = False
+        self.is_shop_open = False
+        self.shop_overlay = None
+
+    def open_shop_overlay(self, shop_id: str = "default"):
+        self.is_shop_open = True
+        self.is_setting_open = False
+        self.is_bag_open = False
+        self.shop_overlay = ShopOverlay(self.game_manager.bag, shop_id)
 
     @override
     def enter(self) -> None:
@@ -190,19 +282,26 @@ class GameScene(Scene):
     @override
     def update(self, dt: float):
 
-        # ====== 彈窗倒數 ======
+        # ===== popup timer =====
         if self.popup_timer > 0:
             self.popup_timer -= dt
             if self.popup_timer <= 0:
                 self.popup_msg = None
 
-        # ----- 右上按鈕 -----
+        # ----- right top buttons -----
         self.setting_button.update(dt)
         self.bag_button.update(dt)
 
-        # ====== 設定 overlay ======
-        if self.is_setting_open:
+        # ===== SHOP overlay（最高優先）=====
+        if self.is_shop_open and self.shop_overlay and self.shop_overlay.open:
+            self.shop_overlay.update(dt)
+            if not self.shop_overlay.open:
+                self.is_shop_open = False
+                self.shop_overlay = None
+            return
 
+        # ===== setting overlay =====
+        if self.is_setting_open:
             if pg.key.get_pressed()[pg.K_ESCAPE]:
                 self.is_setting_open = False
 
@@ -213,23 +312,42 @@ class GameScene(Scene):
             SettingScene.handle_panel_input(self.panel_rect)
             return
 
-        # ====== 背包 overlay ======
+        # ===== bag overlay =====
         if self.is_bag_open:
-
             if pg.key.get_pressed()[pg.K_ESCAPE]:
                 self.is_bag_open = False
-
             self.overlay_close_button.update(dt)
             return
 
-        # ====== 原本遊戲邏輯 ======
+        # ===== original game logic =====
         if self.game_manager.player:
             self.game_manager.player.update(dt)
-            # 玩家移動完後檢查是否踩在 PokemonBush 上
             self._update_bush_state()
 
+        # Enemy trainers
         for enemy in self.game_manager.current_enemy_trainers:
             enemy.update(dt)
+
+        # Shop NPCs：偵測玩家是否可互動 + 按 E 開商店
+        player = self.game_manager.player
+        if player:
+            player_rect = player.get_rect()
+            keys = pg.key.get_pressed()
+            e_now = bool(keys[pg.K_e])
+            e_pressed_once = e_now and (not self._prev_e)
+
+            for npc in self.game_manager.current_shop_npcs:
+                # 讓 NPC 自己決定 detected，用來畫驚嘆號
+                npc.detected = npc.can_interact(player_rect)
+
+                npc.update(dt)
+
+                if npc.detected and e_pressed_once:
+                    # 不切 scene，直接開 overlay
+                    self.open_shop_overlay(getattr(npc, "shop_id", "default"))
+                    break
+
+            self._prev_e = e_now
 
         self.game_manager.bag.update(dt)
 
@@ -251,21 +369,25 @@ class GameScene(Scene):
         else:
             camera = PositionCamera(0, 0)
 
-        # ===== 地圖 =====
+        # ===== map =====
         self.game_manager.current_map.draw(screen, camera)
 
-        # ===== 玩家 =====
+        # ===== shop npcs =====
+        for npc in self.game_manager.current_shop_npcs:
+            npc.draw(screen, camera)
+
+        # ===== player =====
         if self.game_manager.player:
             self.game_manager.player.draw(screen, camera)
 
-        # ===== 敵人 =====
+        # ===== enemies =====
         for enemy in self.game_manager.current_enemy_trainers:
             enemy.draw(screen, camera)
 
-        # ===== 背包（玩家 UI）=====
+        # ===== bag ui =====
         self.game_manager.bag.draw(screen)
 
-        # ===== 線上玩家 =====
+        # ===== online players =====
         if self.online_manager and self.game_manager.player:
             list_online = self.online_manager.get_list_players()
             for player in list_online:
@@ -276,14 +398,13 @@ class GameScene(Scene):
                     self.sprite_online.update_pos(pos)
                     self.sprite_online.draw(screen)
 
-        # ===== 右上角按鈕 =====
+        # ===== top-right buttons =====
         self.setting_button.draw(screen)
         self.bag_button.draw(screen)
 
-        # ====== overlay 覆蓋層 ======
+        # ===== setting/bag overlays =====
         if self.is_setting_open or self.is_bag_open:
             sw, sh = GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT
-
             dark = pg.Surface((sw, sh), pg.SRCALPHA)
             dark.fill((0, 0, 0, 160))
             screen.blit(dark, (0, 0))
@@ -295,7 +416,6 @@ class GameScene(Scene):
                     back_button=None,
                     bottom_buttons=self.bottom_buttons
                 )
-
             elif self.is_bag_open:
                 BagScene.draw_panel(
                     screen,
@@ -305,12 +425,16 @@ class GameScene(Scene):
 
             self.overlay_close_button.draw(screen)
 
-        # ====== 把敵人確認視窗畫在最上面 !!! ======
+        # ===== enemy confirm dialog must be topmost =====
         for enemy in self.game_manager.current_enemy_trainers:
             if hasattr(enemy, "show_confirm_dialog") and enemy.show_confirm_dialog:
                 enemy._draw_confirm_dialog(screen)
 
-        # ====== 彈窗（popup）=====
+        # ===== shop overlay draws on top of everything =====
+        if self.is_shop_open and self.shop_overlay and self.shop_overlay.open:
+            self.shop_overlay.draw(screen)
+
+        # ===== popup =====
         if self.popup_msg:
             font = pg.font.SysFont(None, 36)
             surf = font.render(self.popup_msg, True, (0, 0, 0))
@@ -327,48 +451,38 @@ class GameScene(Scene):
             pg.draw.rect(screen, (0, 0, 0), rect, 2)
             screen.blit(surf, (x + pad_x, y + pad_y))
 
-    # ====== Bush / Pokemon 草叢偵測 ======
+    # ====== Bush / Pokemon grass ======
     def _is_player_on_bush_tile(self) -> bool:
-        """回傳玩家現在這一格是不是 PokemonBush 圖層的草叢"""
         player = self.game_manager.player
         if player is None:
             return False
 
         tmx = self.game_manager.current_map.tmxdata
 
-        # 找到 Tiled 裡的 PokemonBush 圖層
         try:
             bush_layer = tmx.get_layer_by_name("PokemonBush")
         except ValueError:
-            # 地圖沒有這個圖層就直接略過
             return False
 
-        # 只處理 TileLayer
         if not isinstance(bush_layer, pytmx.TiledTileLayer):
             return False
 
-        # 以玩家中心點算 tile 座標
         px = player.position.x + GameSettings.TILE_SIZE / 2
         py = player.position.y + GameSettings.TILE_SIZE / 2
         tile_x = int(px // GameSettings.TILE_SIZE)
         tile_y = int(py // GameSettings.TILE_SIZE)
 
-        # 邊界檢查
         if tile_x < 0 or tile_y < 0 or tile_x >= tmx.width or tile_y >= tmx.height:
             return False
 
-        # 在該圖層取出這一格的 gid，0 代表沒有放 tile
         gid = bush_layer.data[tile_y][tile_x]
         return gid != 0
 
     def _update_bush_state(self) -> None:
-        """偵測玩家是否剛踏進 / 離開草叢，踏進去就進 wild 戰鬥"""
         on_bush = self._is_player_on_bush_tile()
 
-        # 剛踏進草叢的一瞬間（上一幀不在，這一幀在）
         if on_bush and not self._was_on_bush:
             Logger.info("Player stepped into PokemonBush")
-            # ★ 每次進 Wild，都用「目前這一份 bag」建立 WildScene
             scene_manager.register_scene("wild", WildScene(self.game_manager.bag))
             scene_manager.change_scene("wild")
 

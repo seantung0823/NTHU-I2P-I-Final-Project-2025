@@ -65,8 +65,8 @@
   ],
   "current_map": "map.tmx",
   "player": {
-    "x": 23.342132752231016,
-    "y": 26.497867247769022
+    "x": 25.885602163828587,
+    "y": 26.67199999999996
   },
   "bag": {
     "monsters": [
@@ -88,7 +88,7 @@
     "items": [
       {
         "name": "Potion",
-        "count": 5,
+        "count": 4,
         "sprite_path": "ingame_ui/potion.png"
       },
       {

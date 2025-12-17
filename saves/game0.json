@@ -8,33 +8,42 @@
           "y": 29,
           "classification": "stationary",
           "facing": "DOWN",
-          "max_tiles": 2
+          "max_tiles": 2,
+          "sprite": "ow2.png"
         },
         {
           "x": 54,
           "y": 16,
           "classification": "stationary",
           "facing": "UP",
-          "max_tiles": 2
+          "max_tiles": 2,
+          "sprite": "ow3.png"
         },
         {
           "x": 31,
           "y": 31,
           "classification": "stationary",
           "facing": "UP",
-          "max_tiles": 2
+          "max_tiles": 2,
+          "sprite": "ow6.png"
         }
       ],
+      "shop_npcs": [],
       "teleport": [
         {
           "x": 24,
           "y": 23,
           "destination": "gym.tmx"
+        },
+        {
+          "x": 16,
+          "y": 27,
+          "destination": "home.tmx"
         }
       ],
       "player": {
         "x": 16,
-        "y": 30
+        "y": 29
       }
     },
     {
@@ -58,16 +67,47 @@
       ],
       "roaming_mobs": [],
       "enemy_trainers": [],
+      "shop_npcs": [],
       "player": {
         "x": 12,
         "y": 12
+      }
+    },
+    {
+      "path": "home.tmx",
+      "teleport": [
+        {
+          "x": 15,
+          "y": 19,
+          "destination": "map.tmx"
+        },
+        {
+          "x": 14,
+          "y": 19,
+          "destination": "map.tmx"
+        }
+      ],
+      "enemy_trainers": [],
+      "shop_npcs": [
+        {
+          "x": 14,
+          "y": 12,
+          "facing": "DOWN",
+          "shop_id": "default",
+          "sprite": "ow10.png"
+        }
+      ],
+      "roaming_mobs": [],
+      "player": {
+        "x": 15,
+        "y": 18
       }
     }
   ],
   "current_map": "map.tmx",
   "player": {
     "x": 16,
-    "y": 30
+    "y": 29
   },
   "bag": {
     "monsters": [

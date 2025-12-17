@@ -1,122 +1,248 @@
 from __future__ import annotations
-from src.utils import Logger, GameSettings, Position, Teleport
-import json, os
-import pygame as pg
-from typing import TYPE_CHECKING
+
+import json
+import os
 from json import JSONDecodeError
+from typing import TYPE_CHECKING
+
+import pygame as pg
+
+from src.utils import Logger, GameSettings, Position, Teleport
+
+import os
+
 
 if TYPE_CHECKING:
     from src.maps.map import Map
     from src.entities.player import Player
     from src.entities.enemy_trainer import EnemyTrainer
+    from src.entities.shop_npc import ShopNPC
     from src.data.bag import Bag
 
 
 class GameManager:
-    # Entities
-    player: Player | None
-    enemy_trainers: dict[str, list[EnemyTrainer]]
+    player: "Player | None"
+    enemy_trainers: dict[str, list["EnemyTrainer"]]
+    shop_npcs: dict[str, list["ShopNPC"]]
     bag: "Bag"
 
-    # Map properties
     current_map_key: str
-    maps: dict[str, Map]
+    maps: dict[str, "Map"]
 
-    # Changing Scene properties
     should_change_scene: bool
     next_map: str
 
-    # 新增：記錄每張地圖的初始/重生位置
     player_spawns: dict[str, Position]
 
     def __init__(
         self,
-        maps: dict[str, Map],
+        maps: dict[str, "Map"],
         start_map: str,
-        player: Player | None,
-        enemy_trainers: dict[str, list[EnemyTrainer]],
-        bag: Bag | None = None,
+        player: "Player | None",
+        enemy_trainers: dict[str, list["EnemyTrainer"]],
+        bag: "Bag | None" = None,
+        shop_npcs: dict[str, list["ShopNPC"]] | None = None,
     ):
-        from src.data.bag import Bag
+        from src.data.bag import Bag as _Bag
 
-        # Game Properties
         self.maps = maps
         self.current_map_key = start_map
         self.player = player
-        self.enemy_trainers = enemy_trainers
-        self.bag = bag if bag is not None else Bag([], [])
 
-        # Check If you should change scene
+        self.enemy_trainers = enemy_trainers
+        self.shop_npcs = shop_npcs if shop_npcs is not None else {}
+
+        self.bag = bag if bag is not None else _Bag([], [])
+
         self.should_change_scene = False
         self.next_map = ""
 
-        # 記錄每張地圖「最後一次離開時」玩家在哪
         self.last_positions: dict[str, Position] = {}
+        self.player_spawns: dict[str, Position] = {}
 
-        # 記錄每張地圖的「spawn 位置」（from_dict 會填）
-        self.player_spawns = {}
+        # ===== Teleport 控制 =====
+        self.from_teleport: bool = False
+        self._tp_cooldown_until_ms: int = 0
+        self._tp_from_map: str | None = None
 
+        # ===== 來源 → 目的 專用落點 =====
+        # gym → map：回到 gym 門口 (24, 24)（你原本寫法保留）
+        self.teleport_overrides: dict[tuple[str, str], Position] = {
+            ("gym.tmx", "map.tmx"): Position(
+                24 * GameSettings.TILE_SIZE,
+                24 * GameSettings.TILE_SIZE,
+            ),
+        }
+
+    # --------------------------------------------------
+    # Properties
+    # --------------------------------------------------
     @property
-    def current_map(self) -> Map:
+    def current_map(self) -> "Map":
         return self.maps[self.current_map_key]
 
     @property
-    def current_enemy_trainers(self) -> list[EnemyTrainer]:
+    def current_enemy_trainers(self) -> list["EnemyTrainer"]:
         return self.enemy_trainers.get(self.current_map_key, [])
+
+    @property
+    def current_shop_npcs(self) -> list["ShopNPC"]:
+        return self.shop_npcs.get(self.current_map_key, [])
 
     @property
     def current_teleporter(self) -> list[Teleport]:
         return self.maps[self.current_map_key].teleporters
 
+    # --------------------------------------------------
+    # Map switching
+    # --------------------------------------------------
     def switch_map(self, target: str) -> None:
         if target not in self.maps:
-            Logger.warning(f"Map '{target}' not loaded; cannot switch.")
+            Logger.warning(f"Map '{target}' not loaded.")
             return
 
-        # 如果有玩家，把目前地圖的最後位置記起來
         if self.player is not None:
             self.last_positions[self.current_map_key] = self.player.position.copy()
 
         self.next_map = target
         self.should_change_scene = True
 
-    def try_switch_map(self) -> None:
-        if self.should_change_scene:
-            self.current_map_key = self.next_map
-            self.next_map = ""
-            self.should_change_scene = False
+    # --------------------------------------------------
+    # Teleport helpers
+    # --------------------------------------------------
+    def _get_teleport_tile(self, tp: Teleport) -> tuple[int, int] | None:
+        if hasattr(tp, "x") and hasattr(tp, "y"):
+            return int(tp.x), int(tp.y)
 
-            if self.player:
-                # 如果之前來過這張地圖，就回到「上次離開的位置」
-                if self.current_map_key in self.last_positions:
-                    self.player.position = self.last_positions[self.current_map_key].copy()
-                # 否則用 spawn 當初始位置
-                elif self.current_map_key in self.player_spawns:
-                    spawn = self.player_spawns[self.current_map_key]
-                    self.player.position = spawn.copy()
-                else:
-                    # 最後的保險：用 Map 自己的 spawn
-                    spawn = self.maps[self.current_map_key].spawn
-                    self.player.position = spawn.copy()
+        for name in ("tile", "tile_pos", "grid"):
+            if hasattr(tp, name):
+                p = getattr(tp, name)
+                if isinstance(p, Position):
+                    return int(p.x), int(p.y)
 
-    def check_collision(self, rect: pg.Rect) -> bool:
-        if self.maps[self.current_map_key].check_collision(rect):
+        for name in ("position", "pos"):
+            if hasattr(tp, name):
+                p = getattr(tp, name)
+                if isinstance(p, Position):
+                    return (
+                        int(p.x // GameSettings.TILE_SIZE),
+                        int(p.y // GameSettings.TILE_SIZE),
+                    )
+        return None
+
+    def _get_teleport_destination(self, tp: Teleport) -> str | None:
+        for name in ("destination", "target", "to_map"):
+            if hasattr(tp, name):
+                v = getattr(tp, name)
+                if isinstance(v, str):
+                    return v
+        return None
+
+    def _trigger_teleport_if_match_tile(self, tx: int, ty: int) -> bool:
+        now = pg.time.get_ticks()
+        if now < self._tp_cooldown_until_ms:
+            return False
+
+        for tp in self.current_teleporter:
+            tile = self._get_teleport_tile(tp)
+            if tile != (tx, ty):
+                continue
+
+            dest = self._get_teleport_destination(tp)
+            if not dest:
+                continue
+
+            self.from_teleport = True
+            self._tp_from_map = self.current_map_key
+            self.switch_map(dest)
+            self._tp_cooldown_until_ms = now + 350
             return True
-        for entity in self.enemy_trainers.get(self.current_map_key, []):
-            if rect.colliderect(entity.animation.rect):
-                return True
+
         return False
+
+    # --------------------------------------------------
+    # Main update
+    # --------------------------------------------------
+    def try_switch_map(self) -> None:
+        if self.player:
+            cx = self.player.position.x + GameSettings.TILE_SIZE / 2
+            cy = self.player.position.y + GameSettings.TILE_SIZE / 2
+            tx = int(cx // GameSettings.TILE_SIZE)
+            ty = int(cy // GameSettings.TILE_SIZE)
+            if self._trigger_teleport_if_match_tile(tx, ty):
+                return
+
+        if not self.should_change_scene:
+            return
+
+        self.current_map_key = self.next_map
+        self.next_map = ""
+        self.should_change_scene = False
+
+        if not self.player:
+            return
+
+        # ===== teleport 切圖 =====
+        if self.from_teleport:
+            key = (self._tp_from_map or "", self.current_map_key)
+
+            if key in self.teleport_overrides:
+                self.player.position = self.teleport_overrides[key].copy()
+            elif self.current_map_key in self.player_spawns:
+                self.player.position = self.player_spawns[self.current_map_key].copy()
+            else:
+                self.player.position = self.maps[self.current_map_key].spawn.copy()
+
+            self.from_teleport = False
+            self._tp_from_map = None
+            self._tp_cooldown_until_ms = pg.time.get_ticks() + 350
+            return
+
+        # ===== 非 teleport =====
+        if self.current_map_key in self.last_positions:
+            self.player.position = self.last_positions[self.current_map_key].copy()
+        elif self.current_map_key in self.player_spawns:
+            self.player.position = self.player_spawns[self.current_map_key].copy()
+        else:
+            self.player.position = self.maps[self.current_map_key].spawn.copy()
+
+    # --------------------------------------------------
+    # Collision (撞門邊也能 TP)
+    # --------------------------------------------------
+    def check_collision(self, rect: pg.Rect) -> bool:
+        now = pg.time.get_ticks()
+
+        blocked_by_map = self.maps[self.current_map_key].check_collision(rect)
+
+        if blocked_by_map and now >= self._tp_cooldown_until_ms:
+            for tp in self.current_teleporter:
+                tile = self._get_teleport_tile(tp)
+                if not tile:
+                    continue
+
+                tx, ty = tile
+                tp_rect = pg.Rect(
+                    tx * GameSettings.TILE_SIZE,
+                    ty * GameSettings.TILE_SIZE,
+                    GameSettings.TILE_SIZE,
+                    GameSettings.TILE_SIZE,
+                )
+
+                if rect.colliderect(tp_rect):
+                    dest = self._get_teleport_destination(tp)
+                    if dest:
+                        self.from_teleport = True
+                        self._tp_from_map = self.current_map_key
+                        self.switch_map(dest)
+                        self._tp_cooldown_until_ms = now + 350
+                    return True
+
+        return blocked_by_map
 
     # =========================
     #         SAVE / LOAD
     # =========================
     def save(self, path: str) -> None:
-        """
-        比原本安全：
-        1. 先呼叫 to_dict()，失敗了不會動到檔案
-        2. 成功後寫入 path.tmp
-        3. 全部成功才 os.replace 成正式存檔
-        """
         tmp_path = path + ".tmp"
 
         try:
@@ -158,21 +284,18 @@ class GameManager:
     #       SERIALIZATION
     # =========================
     def to_dict(self) -> dict[str, object]:
-        """
-        把整個遊戲狀態轉成「只包含 JSON 可以吃的型別」。
-        """
         map_blocks: list[dict[str, object]] = []
 
         for key, m in self.maps.items():
-            # 1. 地圖本身的資料
             block = m.to_dict()
 
-            # 2. 該地圖的敵方訓練家
             block["enemy_trainers"] = [
                 t.to_dict() for t in self.enemy_trainers.get(key, [])
             ]
+            block["shop_npcs"] = [
+                s.to_dict() for s in self.shop_npcs.get(key, [])
+            ]
 
-            # 3. 該地圖的 spawn（如果有記錄）
             spawn_pos = self.player_spawns.get(key)
 
             if isinstance(spawn_pos, Position):
@@ -181,7 +304,6 @@ class GameManager:
                     "y": spawn_pos.y / GameSettings.TILE_SIZE,
                 }
             else:
-                # 沒有 player_spawns，就盡量從 Map 的 spawn 取
                 if hasattr(m, "spawn") and isinstance(m.spawn, Position):
                     block["player"] = {
                         "x": m.spawn.x / GameSettings.TILE_SIZE,
@@ -199,52 +321,75 @@ class GameManager:
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "GameManager":
+        import os
         from src.maps.map import Map
         from src.entities.player import Player
         from src.entities.enemy_trainer import EnemyTrainer
+        from src.entities.shop_npc import ShopNPC
         from src.data.bag import Bag as _Bag
+        from src.utils import GameSettings, Position, Teleport
 
         Logger.info("Loading maps")
         maps_data = data["map"]
+
         maps: dict[str, Map] = {}
         player_spawns: dict[str, Position] = {}
         trainers: dict[str, list[EnemyTrainer]] = {}
+        shops: dict[str, list[ShopNPC]] = {}
 
-        # 先把 maps 建好，順便把每張地圖的 spawn 記起來
+        # ---------- helper：統一 key = 檔名 ----------
+        def norm_key(path: str) -> str:
+            return os.path.basename(path)
+
+        # 1) 先建立 maps / spawns 的字典（key 全部用檔名）
         for entry in maps_data:
-            path = entry["path"]
-            maps[path] = Map.from_dict(entry)
+            raw_path = entry["path"]
+            key = norm_key(raw_path)
+
+            # 讓 Map 自己照原本方式讀 tmx，但我們存進 dict 用 key（檔名）
+            maps[key] = Map.from_dict(entry)
 
             sp = entry.get("player")
             if sp:
-                player_spawns[path] = Position(
+                player_spawns[key] = Position(
                     sp["x"] * GameSettings.TILE_SIZE,
                     sp["y"] * GameSettings.TILE_SIZE,
                 )
 
-            # 給 trainers 一個空 list，等一下再填
-            trainers[path] = []
+            trainers[key] = []
+            shops[key] = []
 
-        current_map = data["current_map"]
+        # 2) current_map 也要 normalize
+        current_map = norm_key(data["current_map"])
 
-        # 先建出 GameManager 本體（沒有 player、bag）
+        # 3) 建 GameManager
         gm = cls(
             maps,
             current_map,
-            None,  # Player
+            None,
             trainers,
             bag=None,
+            shop_npcs=shops,
         )
         gm.current_map_key = current_map
         gm.player_spawns = player_spawns
 
-        Logger.info("Loading enemy trainers")
-        for m in data["map"]:
-            path = m["path"]
-            raw_data = m.get("enemy_trainers", [])
-            gm.enemy_trainers[path] = [
-                EnemyTrainer.from_dict(t, gm) for t in raw_data
-            ]
+        # 4) teleport.destination 也要 normalize（避免 switch_map 找不到 key）
+        for k, m in gm.maps.items():
+            # 你 Map 內 teleporters 是 Teleport 物件（或類似）
+            for tp in getattr(m, "teleporters", []):
+                if hasattr(tp, "destination") and isinstance(tp.destination, str):
+                    tp.destination = norm_key(tp.destination)
+
+        Logger.info("Loading enemy trainers / shop npcs")
+        for entry in maps_data:
+            key = norm_key(entry["path"])
+
+            raw_trainers = entry.get("enemy_trainers", [])
+            gm.enemy_trainers[key] = [EnemyTrainer.from_dict(t, gm) for t in raw_trainers]
+
+            raw_shops = entry.get("shop_npcs", [])
+            gm.shop_npcs[key] = [ShopNPC.from_dict(s, gm) for s in raw_shops]
 
         Logger.info("Loading Player")
         if data.get("player"):
