@@ -10,6 +10,9 @@ from src.scenes.scene import Scene
 from src.utils import GameSettings, Logger
 from src.core.services import scene_manager, input_manager, sound_manager
 from src.sprites import BackgroundSprite, Animation
+import re
+import copy
+
 
 if TYPE_CHECKING:
     from src.data.bag import Bag
@@ -26,16 +29,31 @@ class WildScene(Scene):
         * Potion：從 Bag 裡扣一個 Potion，幫玩家補血
         * Ball：從 Bag 裡扣一顆 Pokeball，播放捕捉動畫，最後判定成功或失敗
     - Run：逃跑，顯示 Got away safely! 然後回到 game scene
+
+    ✅ 新增（不影響舊用法）：
+    - 可選擇傳入 encounter 來決定敵人
+      encounter 格式範例：
+      {
+        "enemy": {"name": "Pikachu", "max_hp": 70, "sprite": "sprites/pika_idle.png"},
+        # 或
+        "enemy_pool": [
+            {"name": "...", "max_hp": ..., "sprite": "..."},
+            ...
+        ]
+      }
     """
 
     background: BackgroundSprite
 
     @override
-    def __init__(self, bag: "Bag | None" = None) -> None:
+    def __init__(self, bag: "Bag | None" = None, encounter: dict | None = None) -> None:
         super().__init__()
 
         # 可以為 None（如果沒有把 Bag 傳進來就只是「假用道具」）
         self.bag: "Bag | None" = bag
+
+        # ✅ 新增：保存 encounter（沒有傳也沒關係）
+        self.encounter = encounter or {}
 
         # 背景
         self.background = BackgroundSprite("backgrounds/background1.png")
@@ -54,8 +72,52 @@ class WildScene(Scene):
             self.dialog_height,
         )
 
-        # 訊息
-        self.message_intro = "A wild Florian appeared!"
+        # ---------- 戰鬥數值 ----------
+        self.player_name = "Florian"
+        self.player_max_hp = 100
+        self.player_hp = self.player_max_hp
+
+        # ✅ 新增：決定敵人資料（兼容：沒傳 encounter 就跟以前一樣）
+        enemy_default = {"name": "Florian", "max_hp": 80, "sprite": "sprites/sprite1_idle.png"}
+
+        enemy_data = None
+        if isinstance(self.encounter.get("enemy"), dict):
+            enemy_data = self.encounter.get("enemy")
+        else:
+            pool = self.encounter.get("enemy_pool")
+            if isinstance(pool, list) and len(pool) > 0:
+                enemy_data = random.choice(pool)
+
+        if not isinstance(enemy_data, dict):
+            enemy_data = enemy_default
+
+        self.enemy_name = str(enemy_data.get("name", enemy_default["name"]))
+        self.enemy_max_hp = int(enemy_data.get("max_hp", enemy_default["max_hp"]))
+        self.enemy_hp = self.enemy_max_hp
+        self.enemy_sprite_path = str(enemy_data.get("sprite", enemy_default["sprite"]))
+        
+                # ✅ 保存本次遭遇的 enemy_data（避免之後抓到時資訊丟失）
+        self._enemy_data = copy.deepcopy(enemy_data)
+
+        # ✅ 由 battle sprite 推斷 species_id（例如 sprites/sprite3_idle.png -> 3）
+        self.enemy_species_id: int | None = None
+        m = re.search(r"sprite(\d+)_", self.enemy_sprite_path.replace("\\", "/"))
+        if m:
+            try:
+                self.enemy_species_id = int(m.group(1))
+            except Exception:
+                self.enemy_species_id = None
+
+        # ✅ menu icon 路徑（讓背包/切換顯示正確）
+        # 你專案裡 menu icon 看起來是 menu_sprites/menuspriteX.png
+        if self.enemy_species_id is not None:
+            self.enemy_menu_sprite_path = f"menu_sprites/menusprite{self.enemy_species_id}.png"
+        else:
+            self.enemy_menu_sprite_path = "menu_sprites/menusprite1.png"
+
+
+        # 訊息（改成動態敵人）
+        self.message_intro = f"A wild {self.enemy_name} appeared!"
         self.message_menu = "What will you do?"
         self.message = self.message_intro
 
@@ -78,16 +140,6 @@ class WildScene(Scene):
         self.enemy_scale_end = 1.0
         self.player_scale_start = 0.3
         self.player_scale_end = 1.0
-
-        # ---------- 戰鬥數值 ----------
-        self.player_name = "Florian"
-        self.enemy_name = "Florian"
-
-        self.player_max_hp = 100
-        self.player_hp = self.player_max_hp
-
-        self.enemy_max_hp = 80
-        self.enemy_hp = self.enemy_max_hp
 
         # 攻擊 / 動畫計時
         self.action_duration = 0.8
@@ -116,9 +168,10 @@ class WildScene(Scene):
         # 是否正在 Item 選單裡
         self.in_item_menu: bool = False
 
-        # ---------- 寶可夢動畫（雙方都用 sprite1_idle） ----------
+        # ---------- 寶可夢動畫 ----------
+        # ✅ enemy 改成用 enemy_sprite_path（不影響原本，預設還是 sprite1_idle）
         self.enemy_anim = Animation(
-            "sprites/sprite1_idle.png",
+            self.enemy_sprite_path,
             rows=["idle"],
             n_keyframes=4,
             size=(GameSettings.TILE_SIZE * 3, GameSettings.TILE_SIZE * 3),
@@ -147,9 +200,7 @@ class WildScene(Scene):
         # ---------- 球圖片（老師給的 ball.png） ----------
         self.ball_image: pg.Surface | None = None
         try:
-            # 正確路徑在 assets/images/ingame_ui/ball.png
             raw_img = pg.image.load("assets/images/ingame_ui/ball.png").convert_alpha()
-            # 可以調整大小，24x24 只是示範
             self.ball_image = pg.transform.smoothscale(raw_img, (24, 24))
         except Exception as e:
             Logger.warning(f"WildScene: failed to load ball image: {e}")
@@ -177,7 +228,7 @@ class WildScene(Scene):
         self.action_timer = 0.0
         self.end_timer = 0.0
         self.ball_timer = 0.0
-        self.enemy_inside_ball = False  # 重新進戰鬥，敵人還在外面
+        self.enemy_inside_ball = False
         self.enemy_capture_timer = 0.0
 
         # 進入野生戰鬥時換成對戰 BGM
@@ -198,7 +249,6 @@ class WildScene(Scene):
         self.enemy_anim.update(dt)
         self.player_anim.update(dt)
 
-        # ---------- 前置動畫 ----------
         if self.phase == "RADIAL":
             self.transition_timer += dt
             if self.transition_timer >= self.transition_duration:
@@ -218,12 +268,10 @@ class WildScene(Scene):
                 self.message = self.message_menu
             return
 
-        # ---------- 玩家選擇：Fight / Item / Run ----------
         if self.phase == "PLAYER_CHOICE":
             self._handle_player_choice()
             return
 
-        # ---------- 玩家攻擊動畫 ----------
         if self.phase == "PLAYER_ATTACK":
             self.action_timer += dt
             if self.action_timer >= self.action_duration:
@@ -231,7 +279,6 @@ class WildScene(Scene):
                 self._apply_player_attack()
             return
 
-        # ---------- 敵人攻擊動畫 ----------
         if self.phase == "ENEMY_ATTACK":
             self.action_timer += dt
             if self.action_timer >= self.action_duration:
@@ -239,7 +286,6 @@ class WildScene(Scene):
                 self._apply_enemy_attack()
             return
 
-        # ---------- 逃跑動畫 ----------
         if self.phase == "RUN_AWAY":
             self.action_timer += dt
             if self.action_timer >= self.action_duration:
@@ -248,48 +294,39 @@ class WildScene(Scene):
                 self.end_timer = 0.0
             return
 
-        # ---------- 丟球動畫 ----------
         if self.phase == "BALL_THROW":
             self.ball_timer += dt
             if self.ball_timer >= self.ball_throw_duration:
                 self.ball_timer = 0.0
-                # 球飛到敵人位置，開始搖晃＋縮小動畫
                 self.phase = "BALL_SHAKE"
                 self.enemy_capture_timer = 0.0
-                self.enemy_inside_ball = False  # 先讓敵人還看得到，會在 BALL_SHAKE 裡縮小到消失
+                self.enemy_inside_ball = False
             return
 
-        # ---------- 球搖晃動畫（同時處理縮小吸進球裡） ----------
         if self.phase == "BALL_SHAKE":
             self.ball_timer += dt
 
-            # 「被吸進球裡」縮小動畫：從 1.0 縮到 0
             if not self.enemy_inside_ball:
                 self.enemy_capture_timer += dt
                 if self.enemy_capture_timer >= self.enemy_capture_duration:
                     self.enemy_capture_timer = self.enemy_capture_duration
-                    # 縮到 0 之後，就算是進球裡了 → 不再畫敵人
                     self.enemy_inside_ball = True
 
-            # 球搖完之後再決定成功或失敗
             if self.ball_timer >= self.ball_shake_duration:
                 self.ball_timer = 0.0
                 if self.ball_capture_success:
-                    # 成功：敵人留在球裡
                     self._add_captured_monster_to_bag()
                     self.battle_result = "CAUGHT"
-                    self.message = "Gotcha! Florian was caught!"
+                    self.message = f"Gotcha! {self.enemy_name} was caught!"
                     self.phase = "END"
                     self.end_timer = 0.0
                 else:
-                    # 失敗：敵人從球裡跳出來
                     self.enemy_inside_ball = False
                     self.message = "Oh no! It broke free!"
                     self.phase = "PLAYER_CHOICE"
                     self.in_item_menu = False
             return
 
-        # ---------- 結束：顯示結果，約 1 秒後回 game ----------
         if self.phase == "END":
             self.end_timer += dt
             if self.end_timer >= self.end_duration:
@@ -300,12 +337,10 @@ class WildScene(Scene):
     # 玩家選擇：Fight / Item / Run
     # -------------------------------------------------
     def _handle_player_choice(self) -> None:
-        # 先看有沒有在 item 子選單裡
         if self.in_item_menu:
             self._handle_item_menu()
             return
 
-        # F = Fight(攻擊), R = Run
         if input_manager.key_pressed(pg.K_f):
             self._player_start_attack()
             return
@@ -314,13 +349,11 @@ class WildScene(Scene):
             self._player_run()
             return
 
-        # I = Item（開啟 Item 選單）
         if input_manager.key_pressed(pg.K_i):
             self.in_item_menu = True
             self.message = "Choose an item."
             return
 
-        # 滑鼠點主選單按鈕
         if input_manager.mouse_pressed(pg.BUTTON_LEFT):
             mx, my = input_manager.mouse_pos
             for rect, label in self._get_menu_buttons():
@@ -338,13 +371,11 @@ class WildScene(Scene):
     # Item 子選單：Potion / Ball / Cancel
     # -------------------------------------------------
     def _handle_item_menu(self) -> None:
-        # ESC 或 Cancel → 回主選單
         if input_manager.key_pressed(pg.K_ESCAPE):
             self.in_item_menu = False
             self.message = self.message_menu
             return
 
-        # 鍵盤快速鍵：1 = Potion, 2 = Ball, 3 = Cancel
         if input_manager.key_pressed(pg.K_1):
             self._use_potion()
             return
@@ -356,7 +387,6 @@ class WildScene(Scene):
             self.message = self.message_menu
             return
 
-        # 滑鼠點 item 按鈕
         if input_manager.mouse_pressed(pg.BUTTON_LEFT):
             mx, my = input_manager.mouse_pos
             for rect, label in self._get_item_buttons():
@@ -370,7 +400,6 @@ class WildScene(Scene):
                         self.message = self.message_menu
                     return
 
-    # ---------- 使用 Potion ----------
     def _use_potion(self) -> None:
         if self._get_item_count("potion") <= 0:
             self.message = "No Potion left!"
@@ -386,9 +415,8 @@ class WildScene(Scene):
         real_heal = self.player_hp - old_hp
 
         self.message = f"You used a Potion! (+{real_heal} HP)"
-        self.in_item_menu = False  # 回到主選單（但仍然是 PLAYER_CHOICE）
+        self.in_item_menu = False
 
-    # ---------- 使用 Pokeball（含捕捉動畫） ----------
     def _use_pokeball(self) -> None:
         if self._get_item_count("pokeball") <= 0:
             self.message = "No Pokeball left!"
@@ -398,12 +426,11 @@ class WildScene(Scene):
             self.message = "No Pokeball left!"
             return
 
-        # 捕捉成功率：血越少成功率越高
-        hp_ratio = self.enemy_hp / self.enemy_max_hp
-        success_prob = 0.35 + (1.0 - hp_ratio) * 0.45  # 約 0.35 ~ 0.8
+        # ✅ 修正：避免除以 0
+        hp_ratio = (self.enemy_hp / self.enemy_max_hp) if self.enemy_max_hp > 0 else 1.0
+        success_prob = 0.35 + (1.0 - hp_ratio) * 0.45
         self.ball_capture_success = (random.random() < success_prob)
 
-        # 進入丟球動畫
         self.message = "You threw a ball!"
         self.in_item_menu = False
         self.phase = "BALL_THROW"
@@ -413,35 +440,30 @@ class WildScene(Scene):
     # Fight / Run / 攻擊結算
     # -------------------------------------------------
     def _player_start_attack(self) -> None:
-        """Fight 按鈕：開始玩家攻擊動畫階段"""
-        self.message = "You attack the wild Florian!"
+        self.message = f"You attack the wild {self.enemy_name}!"
         self.phase = "PLAYER_ATTACK"
         self.action_timer = 0.0
 
     def _player_run(self) -> None:
-        """Run 按鈕：逃跑"""
         self.battle_result = "RUN"
         self.message = "Got away safely!"
         self.phase = "RUN_AWAY"
         self.action_timer = 0.0
 
-    # 真正結算玩家攻擊（扣敵人 HP）
     def _apply_player_attack(self) -> None:
         dmg = 20
         self.enemy_hp = max(0, self.enemy_hp - dmg)
 
         if self.enemy_hp <= 0:
             self.battle_result = "WIN"
-            self.message = "The wild Florian fainted!"
+            self.message = f"The wild {self.enemy_name} fainted!"
             self.phase = "END"
             self.end_timer = 0.0
         else:
-            # 換敵人攻擊
-            self.message = "The wild Florian is attacking!"
+            self.message = f"The wild {self.enemy_name} is attacking!"
             self.phase = "ENEMY_ATTACK"
             self.action_timer = 0.0
 
-    # 真正結算敵人攻擊（扣玩家 HP）
     def _apply_enemy_attack(self) -> None:
         dmg = 12
         self.player_hp = max(0, self.player_hp - dmg)
@@ -452,7 +474,6 @@ class WildScene(Scene):
             self.phase = "END"
             self.end_timer = 0.0
         else:
-            # 回到玩家選擇階段
             self.message = self.message_menu
             self.phase = "PLAYER_CHOICE"
 
@@ -460,7 +481,6 @@ class WildScene(Scene):
     # Bag 相關小工具
     # -------------------------------------------------
     def _get_item_count(self, name: str) -> int:
-        """從 Bag 裡讀某個道具的數量（大小寫不分）。bag 為 None 時，當作一大堆。"""
         if not self.bag:
             return 999
 
@@ -472,9 +492,8 @@ class WildScene(Scene):
         return 0
 
     def _consume_item(self, name: str) -> bool:
-        """從 Bag 裡扣掉一個道具；成功回 True，沒得扣回 False。"""
         if not self.bag:
-            return True  # 沒接 Bag 時就當作無限
+            return True
 
         items = getattr(self.bag, "_items_data", [])
         target = name.lower()
@@ -488,7 +507,6 @@ class WildScene(Scene):
         return False
 
     def _add_captured_monster_to_bag(self) -> None:
-        """把抓到的 Florian 加到 Bag 的 monsters 裡。"""
         if not self.bag:
             Logger.warning("WildScene: capture success but bag is None (monster not stored).")
             return
@@ -498,16 +516,26 @@ class WildScene(Scene):
             Logger.warning("WildScene: bag has no _monsters_data (monster not stored).")
             return
 
-        # 這裡用一個簡單範例，可以之後改成真的 wild 資料
+        # ✅ 用本次遭遇的 enemy 資訊存入背包（每隻都會不同）
         new_mon = {
-            "name": "Florian",
+            "name": self.enemy_name,
             "hp": self.enemy_max_hp,
             "max_hp": self.enemy_max_hp,
             "level": 20,
-            "sprite_path": "menu_sprites/menusprite1.png",
+
+            # 讓背包/切換/戰鬥能辨識是哪一隻
+            "species_id": self.enemy_species_id,
+
+            # menu icon（背包畫面、switch 選單用）
+            "sprite_path": getattr(self, "enemy_menu_sprite_path", "menu_sprites/menusprite1.png"),
+
+            # （可選）戰鬥 sprite（以後想用也方便）
+            "battle_sprite": self.enemy_sprite_path,
         }
+
         monsters.append(new_mon)
-        Logger.info("WildScene: captured Florian added to bag!")
+        Logger.info(f"WildScene: captured {self.enemy_name} added to bag! (species_id={self.enemy_species_id})")
+
 
     # -------------------------------------------------
     # Draw
@@ -519,49 +547,39 @@ class WildScene(Scene):
         self._draw_hp_boxes(screen)
         self._draw_monsters(screen)
 
-        # 底部對話框
         pg.draw.rect(screen, (0, 0, 0), self.dialog_rect)
 
         text = self.font_medium.render(self.message, True, (255, 255, 255))
         screen.blit(text, (self.dialog_rect.left + 16, self.dialog_rect.top + 16))
 
-        # 玩家回合：畫主選單或 item 子選單
         if self.phase == "PLAYER_CHOICE":
             if self.in_item_menu:
                 self._draw_item_buttons(screen)
             else:
                 self._draw_menu_buttons(screen)
 
-        # 丟球 / 搖晃時畫球
         if self.phase in ("BALL_THROW", "BALL_SHAKE"):
             self._draw_ball(screen)
 
         if self.phase == "RADIAL":
             self._draw_radial_transition(screen)
 
-    # -------------------------------------------------
-    # HP 顯示
-    # -------------------------------------------------
     def _draw_hp_boxes(self, screen: pg.Surface) -> None:
         box_w, box_h = 180, 60
 
-        # 敵人 HP
-        enemy_rect = pg.Rect(
-            GameSettings.SCREEN_WIDTH - box_w - 20, 20, box_w, box_h
-        )
+        enemy_rect = pg.Rect(GameSettings.SCREEN_WIDTH - box_w - 20, 20, box_w, box_h)
         pg.draw.rect(screen, (255, 255, 255), enemy_rect)
         pg.draw.rect(screen, (0, 0, 0), enemy_rect, 2)
 
         name_text = self.font_small.render(self.enemy_name, True, (0, 0, 0))
         screen.blit(name_text, (enemy_rect.x + 8, enemy_rect.y + 8))
 
-        hp_ratio = self.enemy_hp / self.enemy_max_hp
+        hp_ratio = (self.enemy_hp / self.enemy_max_hp) if self.enemy_max_hp > 0 else 0.0
         bar_back = pg.Rect(enemy_rect.x + 8, enemy_rect.y + box_h - 20, box_w - 16, 10)
         pg.draw.rect(screen, (80, 80, 80), bar_back)
         bar = pg.Rect(bar_back.x, bar_back.y, int(bar_back.w * hp_ratio), 10)
         pg.draw.rect(screen, (0, 200, 0), bar)
 
-        # 玩家 HP
         player_rect = pg.Rect(
             20,
             GameSettings.SCREEN_HEIGHT - self.dialog_height - box_h - 10,
@@ -574,24 +592,14 @@ class WildScene(Scene):
         pname_text = self.font_small.render(self.player_name, True, (0, 0, 0))
         screen.blit(pname_text, (player_rect.x + 8, player_rect.y + 8))
 
-        p_hp_ratio = self.player_hp / self.player_max_hp
-        p_bar_back = pg.Rect(
-            player_rect.x + 8,
-            player_rect.y + box_h - 20,
-            box_w - 16,
-            10,
-        )
+        p_hp_ratio = (self.player_hp / self.player_max_hp) if self.player_max_hp > 0 else 0.0
+        p_bar_back = pg.Rect(player_rect.x + 8, player_rect.y + box_h - 20, box_w - 16, 10)
         pg.draw.rect(screen, (80, 80, 80), p_bar_back)
-        p_bar = pg.Rect(
-            p_bar_back.x,
-            p_bar_back.y,
-            int(p_bar_back.w * p_hp_ratio),
-            10,
-        )
+        p_bar = pg.Rect(p_bar_back.x, p_bar_back.y, int(p_bar_back.w * p_hp_ratio), 10)
         pg.draw.rect(screen, (0, 200, 0), p_bar)
 
     # -------------------------------------------------
-    # 放大動畫
+    # 放大動畫（以下全部保留你的原本邏輯）
     # -------------------------------------------------
     def _lerp(self, a: float, b: float, t: float) -> float:
         return a + (b - a) * t
@@ -608,27 +616,20 @@ class WildScene(Scene):
             enemy_scale = self.enemy_scale_end
             t = min(self.player_zoom_timer / self.player_zoom_duration, 1.0)
             player_scale = self._lerp(self.player_scale_start, self.player_scale_end, t)
-        else:  # 其他階段
+        else:
             enemy_scale = self.enemy_scale_end
             player_scale = self.player_scale_end
 
-        # 捕捉縮小動畫：在 BALL_SHAKE 初期，把敵人從 1.0 縮到 0
         if self.phase == "BALL_SHAKE" and not self.enemy_inside_ball:
             t = min(self.enemy_capture_timer / self.enemy_capture_duration, 1.0)
-            shrink = 1.0 - t  # t: 0→1，shrink: 1→0
+            shrink = 1.0 - t
             enemy_scale *= shrink
 
-        # 敵方：如果被「收進球裡」，就不畫出來
         if enemy_scale > 0 and not self.enemy_inside_ball:
-            self._draw_scaled_animation(
-                screen, self.enemy_anim, self.enemy_pos, enemy_scale
-            )
+            self._draw_scaled_animation(screen, self.enemy_anim, self.enemy_pos, enemy_scale)
 
-        # 我方永遠畫
         if player_scale > 0:
-            self._draw_scaled_animation(
-                screen, self.player_anim, self.player_pos, player_scale
-            )
+            self._draw_scaled_animation(screen, self.player_anim, self.player_pos, player_scale)
 
     def _draw_scaled_animation(
         self,
@@ -642,72 +643,49 @@ class WildScene(Scene):
         frame = frames[idx]
 
         w, h = frame.get_size()
-        surf = pg.transform.smoothscale(
-            frame,
-            (int(w * scale), int(h * scale)),
-        )
+        surf = pg.transform.smoothscale(frame, (int(w * scale), int(h * scale)))
         rect = surf.get_rect(center=center)
         screen.blit(surf, rect)
 
     # -------------------------------------------------
-    # 丟球 & 搖晃動畫（優先用老師的 ball.png，載不到才用備用畫圖）
+    # 丟球 & 搖晃動畫（保留你原本）
     # -------------------------------------------------
     def _draw_ball(self, screen: pg.Surface) -> None:
-        """在 BALL_THROW / BALL_SHAKE 階段畫出球的動畫。"""
-
-        # 起點：玩家寶可夢位置稍微往上
         start_x, start_y = self.player_pos
         start_y -= 40
 
-        # 終點：敵人寶可夢位置再稍微往上
         end_x, end_y = self.enemy_pos
         end_y -= 50
 
         if self.phase == "BALL_THROW":
             t = min(self.ball_timer / self.ball_throw_duration, 1.0)
-            # 線性插值位置
             x = self._lerp(start_x, end_x, t)
             y = self._lerp(start_y, end_y, t)
-            # 做一點拋物線效果（往上拋）
             arc_height = 40
             y -= math.sin(math.pi * t) * arc_height
-        else:  # BALL_SHAKE
-            # 球固定在敵人上方，左右小幅晃動
+        else:
             t = self.ball_timer / self.ball_shake_duration
-            x = end_x + math.sin(t * 6 * math.pi) * 8  # 左右晃動
+            x = end_x + math.sin(t * 6 * math.pi) * 8
             y = end_y
 
         center = (int(x), int(y))
 
-        # 優先用老師給的 ball.png
         if self.ball_image is not None:
             rect = self.ball_image.get_rect(center=center)
             screen.blit(self.ball_image, rect)
             return
 
-        # 如果 ball.png 載不到，才用備用的圓形球（避免完全看不到）
         radius = 10
-        # 外圈
         pg.draw.circle(screen, (0, 0, 0), center, radius + 1)
-        # 下半部白色
         pg.draw.circle(screen, (255, 255, 255), center, radius)
-        # 上半部紅色（半圓）
         rect = pg.Rect(center[0] - radius, center[1] - radius, radius * 2, radius)
         pg.draw.ellipse(screen, (220, 0, 0), rect)
-        # 中間線
-        pg.draw.line(
-            screen,
-            (0, 0, 0),
-            (center[0] - radius, center[1]),
-            (center[0] + radius, center[1]),
-            2,
-        )
-        # 中央小圓
+        pg.draw.line(screen, (0, 0, 0), (center[0] - radius, center[1]), (center[0] + radius, center[1]), 2)
         pg.draw.circle(screen, (255, 255, 255), center, 3)
         pg.draw.circle(screen, (0, 0, 0), center, 3, 1)
 
     # -------------------------------------------------
-    # 選單按鈕（主選單：Fight / Item / Switch / Run）
+    # 選單按鈕（保留你原本：Fight / Item / Switch / Run）
     # -------------------------------------------------
     def _get_menu_buttons(self):
         labels = ["Fight", "Item", "Switch", "Run"]
@@ -730,13 +708,9 @@ class WildScene(Scene):
         for rect, label in self._get_menu_buttons():
             pg.draw.rect(screen, (230, 215, 190), rect)
             pg.draw.rect(screen, (0, 0, 0), rect, 2)
-
             txt = self.font_small.render(label, True, (0, 0, 0))
             screen.blit(txt, txt.get_rect(center=rect.center))
 
-    # -------------------------------------------------
-    # Item 子選單按鈕（Potion / Ball / Cancel）
-    # -------------------------------------------------
     def _get_item_buttons(self):
         labels = ["Potion", "Ball", "Cancel"]
 
@@ -757,12 +731,11 @@ class WildScene(Scene):
         for rect, label in self._get_item_buttons():
             pg.draw.rect(screen, (230, 215, 190), rect)
             pg.draw.rect(screen, (0, 0, 0), rect, 2)
-
             txt = self.font_small.render(label, True, (0, 0, 0))
             screen.blit(txt, txt.get_rect(center=rect.center))
 
     # -------------------------------------------------
-    # 放射轉場動畫
+    # 放射轉場動畫（保留你原本）
     # -------------------------------------------------
     def _draw_radial_transition(self, screen: pg.Surface) -> None:
         progress = min(self.transition_timer / self.transition_duration, 1.0)
@@ -790,3 +763,36 @@ class WildScene(Scene):
             pg.draw.polygon(overlay, (0, 0, 0, 0), [p1, p2, p3])
 
         screen.blit(overlay, (0, 0))
+    
+    def _refresh_enemy_from_encounter(self) -> None:
+        enemy_default = {"name": "Florian", "max_hp": 80, "sprite": "sprites/sprite1_idle.png"}
+
+        enemy_data = None
+        if isinstance(self.encounter.get("enemy"), dict):
+            enemy_data = self.encounter["enemy"]
+        else:
+            pool = self.encounter.get("enemy_pool")
+            if isinstance(pool, list) and len(pool) > 0:
+                enemy_data = random.choice(pool)
+
+        if not isinstance(enemy_data, dict):
+            enemy_data = enemy_default
+
+        self.enemy_name = str(enemy_data.get("name", enemy_default["name"]))
+        self.enemy_max_hp = int(enemy_data.get("max_hp", enemy_default["max_hp"]))
+        self.enemy_hp = self.enemy_max_hp
+        self.enemy_sprite_path = str(enemy_data.get("sprite", enemy_default["sprite"]))
+
+        # 更新開場文字
+        self.message_intro = f"A wild {self.enemy_name} appeared!"
+        self.message = self.message_intro
+
+        # 重新建立敵人動畫（不動玩家動畫）
+        self.enemy_anim = Animation(
+            self.enemy_sprite_path,
+            rows=["idle"],
+            n_keyframes=4,
+            size=(GameSettings.TILE_SIZE * 3, GameSettings.TILE_SIZE * 3),
+            loop=0.6,
+        )
+        self.enemy_anim.switch("idle")

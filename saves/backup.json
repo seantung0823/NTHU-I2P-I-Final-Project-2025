@@ -7,11 +7,16 @@
           "x": 24,
           "y": 23,
           "destination": "gym.tmx"
+        },
+        {
+          "x": 16,
+          "y": 27,
+          "destination": "home.tmx"
         }
       ],
       "player": {
         "x": 16.0,
-        "y": 30.0
+        "y": 29.0
       },
       "enemy_trainers": [
         {
@@ -19,23 +24,27 @@
           "y": 29.0,
           "classification": "stationary",
           "facing": "DOWN",
-          "max_tiles": 2
+          "max_tiles": 2,
+          "sprite": "ow2.png"
         },
         {
           "x": 54.0,
           "y": 16.0,
           "classification": "stationary",
           "facing": "UP",
-          "max_tiles": 2
+          "max_tiles": 2,
+          "sprite": "ow3.png"
         },
         {
           "x": 31.0,
           "y": 31.0,
           "classification": "stationary",
           "facing": "UP",
-          "max_tiles": 2
+          "max_tiles": 2,
+          "sprite": "ow6.png"
         }
-      ]
+      ],
+      "shop_npcs": []
     },
     {
       "path": "gym.tmx",
@@ -60,13 +69,43 @@
         "x": 12.0,
         "y": 12.0
       },
-      "enemy_trainers": []
+      "enemy_trainers": [],
+      "shop_npcs": []
+    },
+    {
+      "path": "home.tmx",
+      "teleport": [
+        {
+          "x": 15,
+          "y": 19,
+          "destination": "map.tmx"
+        },
+        {
+          "x": 14,
+          "y": 19,
+          "destination": "map.tmx"
+        }
+      ],
+      "player": {
+        "x": 15.0,
+        "y": 18.0
+      },
+      "enemy_trainers": [],
+      "shop_npcs": [
+        {
+          "x": 14.0,
+          "y": 12.0,
+          "facing": null,
+          "shop_id": "default",
+          "sprite": "ow10.png"
+        }
+      ]
     }
   ],
   "current_map": "map.tmx",
   "player": {
-    "x": 25.885602163828587,
-    "y": 26.67199999999996
+    "x": 22.78870649403663,
+    "y": 29.357989898732228
   },
   "bag": {
     "monsters": [
@@ -78,11 +117,40 @@
         "sprite_path": "menu_sprites/menusprite1.png"
       },
       {
-        "name": "Florian",
-        "hp": 80,
-        "max_hp": 80,
+        "name": "Rattata",
+        "hp": 55,
+        "max_hp": 55,
         "level": 20,
-        "sprite_path": "menu_sprites/menusprite1.png"
+        "species_id": 2,
+        "sprite_path": "menu_sprites/menusprite2.png",
+        "battle_sprite": "sprites/sprite2_idle.png"
+      },
+      {
+        "name": "Pidgey",
+        "hp": 60,
+        "max_hp": 60,
+        "level": 20,
+        "species_id": 1,
+        "sprite_path": "menu_sprites/menusprite1.png",
+        "battle_sprite": "sprites/sprite1_idle.png"
+      },
+      {
+        "name": "Pikachu",
+        "hp": 70,
+        "max_hp": 70,
+        "level": 20,
+        "species_id": 3,
+        "sprite_path": "menu_sprites/menusprite3.png",
+        "battle_sprite": "sprites/sprite3_idle.png"
+      },
+      {
+        "name": "Oddish",
+        "hp": 65,
+        "max_hp": 65,
+        "level": 20,
+        "species_id": 4,
+        "sprite_path": "menu_sprites/menusprite4.png",
+        "battle_sprite": "sprites/sprite4_idle.png"
       }
     ],
     "items": [
@@ -98,7 +166,7 @@
       },
       {
         "name": "Pokeball",
-        "count": 9,
+        "count": 2,
         "sprite_path": "ingame_ui/ball.png"
       }
     ]

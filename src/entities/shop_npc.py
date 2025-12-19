@@ -21,14 +21,19 @@ class ShopNPC(Entity):
         # 互動範圍（玩家不用貼太近）
         self.interact_rect = pg.Rect(0, 0, GameSettings.TILE_SIZE, GameSettings.TILE_SIZE).inflate(16, 16)
 
-        # 驚嘆號（跟 enemy trainer 一樣概念）
-        self.warning_sign = Sprite(
-            "exclamation.png",
+        # ✅ 商店按鈕 icon（永遠顯示 + 漂浮）
+        self.shop_hint_icon = Sprite(
+            "UI/button_shop.png",
             (GameSettings.TILE_SIZE // 2, GameSettings.TILE_SIZE // 2),
         )
+
+        # 玩家是否在互動範圍內（你在 GameScene 會設定 detected）
         self.detected = False
 
         self.facing: Direction | None = None
+
+        # 漂浮動畫用
+        self._float_t: float = 0.0
 
     def _get_rect(self) -> pg.Rect:
         return pg.Rect(
@@ -38,11 +43,23 @@ class ShopNPC(Entity):
             GameSettings.TILE_SIZE,
         )
 
-    def _update_warning_pos(self) -> None:
-        self.warning_sign.update_pos(
+    def _update_hint_icon_pos(self) -> None:
+        """
+        icon 永遠在 NPC 頭上，並做上下漂浮動畫
+        """
+        # 漂浮：每秒來回，幅度 4px（你可調）
+        float_amp = 4
+        float_speed = 5.0  # 越大越快
+
+        # 用 sin 需要 import math，但我們避免多 import：用 pygame 的時間也行
+        # 這裡用 self._float_t 累積時間做簡單 sin
+        import math
+        offset_y = int(math.sin(self._float_t * float_speed) * float_amp)
+
+        self.shop_hint_icon.update_pos(
             Position(
                 self.position.x + GameSettings.TILE_SIZE // 4,
-                self.position.y - GameSettings.TILE_SIZE // 2,
+                self.position.y - GameSettings.TILE_SIZE // 2 + offset_y,
             )
         )
 
@@ -56,13 +73,19 @@ class ShopNPC(Entity):
 
     @override
     def update(self, dt: float) -> None:
-        self._update_warning_pos()
+        # 漂浮動畫時間累積
+        self._float_t += float(dt)
+        self._update_hint_icon_pos()
 
     @override
     def draw(self, screen: pg.Surface, camera: PositionCamera) -> None:
         super().draw(screen, camera)
+
+        # ✅ icon 永遠顯示（不管 detected）
+        self.shop_hint_icon.draw(screen, camera)
+
+        # 文字提示：仍然只有靠近才顯示（不想要的話把 if 拿掉）
         if self.detected:
-            self.warning_sign.draw(screen, camera)
             self._draw_interact_hint(screen)
 
     def _draw_interact_hint(self, screen: pg.Surface) -> None:
