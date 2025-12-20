@@ -4,9 +4,53 @@ import pygame as pg
 import pytmx
 import os
 import random
+from collections import deque
+
+from dataclasses import dataclass
+from typing import Any
 
 
 from typing import override
+
+
+
+# =========================
+#      SIMPLE TEXT BUTTON
+# =========================
+class TextButton:
+    """A lightweight text-only button (no image assets needed)."""
+
+    def __init__(self, text: str, x: int, y: int, w: int, h: int, on_click):
+        self.text = text
+        self.rect = pg.Rect(x, y, w, h)
+        self.on_click = on_click
+        self._prev_mouse_down = False
+
+    def update(self, dt: float) -> None:
+        mouse_down = bool(pg.mouse.get_pressed(num_buttons=3)[0])
+        if mouse_down and (not self._prev_mouse_down):
+            if self.rect.collidepoint(pg.mouse.get_pos()):
+                try:
+                    self.on_click()
+                except Exception:
+                    pass
+        self._prev_mouse_down = mouse_down
+
+    def draw(self, screen: pg.Surface) -> None:
+        hovered = self.rect.collidepoint(pg.mouse.get_pos())
+        bg = (250, 240, 220) if hovered else (245, 245, 245)
+        pg.draw.rect(screen, bg, self.rect, border_radius=10)
+        pg.draw.rect(screen, (82, 44, 32), self.rect, 3, border_radius=10)
+
+        font = pg.font.SysFont(None, 30, bold=True)
+        label = font.render(self.text, True, (20, 20, 20))
+        screen.blit(
+            label,
+            (
+                self.rect.centerx - label.get_width() // 2,
+                self.rect.centery - label.get_height() // 2,
+            ),
+        )
 
 from src.scenes.scene import Scene
 from src.core import GameManager, OnlineManager
@@ -16,6 +60,19 @@ from src.sprites import Sprite
 from src.interface.components import Button
 from src.scenes.setting_scene import SettingScene
 from src.scenes.bag_scene import BagScene
+
+# ✅ Evo overlay (Evolution Potion)
+try:
+    from src.scenes.evo_scene import EvoScene  # type: ignore
+except Exception:
+    EvoScene = None  # type: ignore
+
+# ✅ Dr overlay (Call Dr popup)
+try:
+    from src.scenes.dr_scene import DrScene  # type: ignore
+except Exception:
+    DrScene = None  # type: ignore
+
 from src.scenes.wild_scene import WildScene
 from src.scenes.shop_scene import ShopScene
 
@@ -342,17 +399,424 @@ class NavigationOverlay:
 
 
 # =========================
+#        CHAT OVERLAY
+# =========================
+class ChatLog:
+    """Keeps recent chat lines and draws them at bottom-left."""
+
+    def __init__(self, max_lines: int = 30):
+        self.lines: deque[tuple[str, str]] = deque(maxlen=max_lines)  # (prefix, text)
+
+    def add(self, prefix: str, text: str) -> None:
+        t = (text or "").strip()
+        if not t:
+            return
+        self.lines.append((str(prefix), t))
+
+    def draw(self, screen: pg.Surface) -> None:
+        if not self.lines:
+            return
+
+        font = pg.font.SysFont(None, 22)
+        outline = pg.font.SysFont(None, 22, bold=True)
+
+        margin = 10
+        x = margin
+        y = GameSettings.SCREEN_HEIGHT - margin
+
+        show = list(self.lines)[-6:]
+        for prefix, msg in reversed(show):
+            line = f"{prefix}: {msg}"
+            surf = font.render(line, True, (240, 240, 240))
+            osurf = outline.render(line, True, (0, 0, 0))
+
+            y -= surf.get_height()
+
+            screen.blit(osurf, (x + 1, y + 1))
+            screen.blit(osurf, (x - 1, y + 1))
+            screen.blit(osurf, (x + 1, y - 1))
+            screen.blit(osurf, (x - 1, y - 1))
+            screen.blit(surf, (x, y))
+
+            y -= 2
+
+
+class ChatOverlay:
+    """Press T to toggle chat input. Enter to send. Esc to close.
+
+    Integrates with OnlineManager via duck-typed methods:
+      send_chat/send_chat_message/... and get_chat_messages/get_chat_history/...
+
+    If your OnlineManager uses different names, just add them below.
+    """
+
+    def __init__(self):
+        self.open: bool = False
+        self.input_text: str = ""
+        self._prev_t: bool = False
+
+        self._seen_keys: set[str] = set()
+
+        self._blink_t: float = 0.0
+        self._cursor_on: bool = True
+
+    def _try_send_online(self, online_manager: Any, text: str) -> None:
+        if not online_manager:
+            return
+
+        for fn in ("send_chat", "send_chat_message", "chat_send", "send_message", "post_chat"):
+            if hasattr(online_manager, fn):
+                try:
+                    getattr(online_manager, fn)(text)
+                    return
+                except Exception:
+                    pass
+
+        for fn in ("send_packet", "emit", "send"):
+            if hasattr(online_manager, fn):
+                try:
+                    getattr(online_manager, fn)({"type": "chat", "text": text})
+                    return
+                except Exception:
+                    pass
+
+    def _try_pull_online(self, online_manager: Any) -> list[dict]:
+        if not online_manager:
+            return []
+
+        for fn in ("get_chat_messages", "get_chat_history", "poll_chat", "fetch_chat", "recv_chat"):
+            if hasattr(online_manager, fn):
+                try:
+                    msgs = getattr(online_manager, fn)()
+                    if isinstance(msgs, list):
+                        return msgs
+                except Exception:
+                    return []
+        return []
+
+    def _normalize_msg(self, raw: dict) -> tuple[str, str, str] | None:
+        if not isinstance(raw, dict):
+            return None
+
+        text = raw.get("text") or raw.get("msg") or raw.get("message") or ""
+        if not isinstance(text, str):
+            try:
+                text = str(text)
+            except Exception:
+                return None
+        text = text.strip()
+        if not text:
+            return None
+
+        pid = raw.get("id") or raw.get("pid") or raw.get("player_id") or raw.get("sender") or "?"
+        prefix = "Other player"
+
+        pid_str = str(pid)
+
+        mid = raw.get("mid") or raw.get("msg_id") or raw.get("uuid") or raw.get("time") or raw.get("ts")
+        if mid is None:
+            key = f"{pid_str}:{text}"
+        else:
+            key = f"{pid_str}:{mid}:{text}"
+        return key, prefix, text
+
+    def toggle(self) -> None:
+        self.open = not self.open
+        if self.open:
+            self.input_text = ""
+            try:
+                pg.key.start_text_input()
+            except Exception:
+                pass
+        else:
+            try:
+                pg.key.stop_text_input()
+            except Exception:
+                pass
+
+    def update(self, dt: float, online_manager: Any, chat_log: ChatLog) -> None:
+        got_any_event = False
+        
+        keys = pg.key.get_pressed()
+        t_now = bool(keys[pg.K_t])
+        if t_now and (not self._prev_t):
+            self.toggle()
+        self._prev_t = t_now
+
+                # Pull new online messages (so log updates even if chat is closed)
+        my_id = getattr(online_manager, "player_id", None) if online_manager else None
+        try:
+            my_id_int = int(my_id) if my_id is not None else None
+        except Exception:
+            my_id_int = None
+
+        for raw in self._try_pull_online(online_manager):
+            # ✅ Server may echo back your own message; ignore self-echo to avoid
+            # showing both "You:" and "Other player:" for the same line.
+            if my_id_int is not None and isinstance(raw, dict):
+                sender = raw.get("from")
+                if sender is None:
+                    sender = raw.get("sender") or raw.get("player_id") or raw.get("pid")
+                try:
+                    if sender is not None and int(sender) == my_id_int:
+                        continue
+                except Exception:
+                    pass
+
+            norm = self._normalize_msg(raw)
+            if not norm:
+                continue
+            key, prefix, text = norm
+            if key in self._seen_keys:
+                continue
+            self._seen_keys.add(key)
+            chat_log.add(prefix, text)
+
+        if not self.open:
+            return
+
+        self._blink_t += dt
+        if self._blink_t >= 0.5:
+            self._blink_t = 0.0
+            self._cursor_on = not self._cursor_on
+
+        for ev in pg.event.get([pg.KEYDOWN, pg.TEXTINPUT]):
+            got_any_event = True
+            if ev.type == pg.TEXTINPUT:
+                if len(self.input_text) < 140:
+                    self.input_text += ev.text
+            elif ev.type == pg.KEYDOWN:
+                if ev.key == pg.K_ESCAPE:
+                    self.toggle()
+                elif ev.key == pg.K_BACKSPACE:
+                    self.input_text = self.input_text[:-1]
+                elif ev.key in (pg.K_RETURN, pg.K_KP_ENTER):
+                    msg = self.input_text.strip()
+                    if msg:
+                        chat_log.add("You", msg)
+                        self._try_send_online(online_manager, msg)
+                    self.input_text = ""
+
+        # Fallback: if another system already consumed pygame events, we can still
+        # type using key polling (letters/numbers/basic punctuation).
+        if not got_any_event:
+            prev = getattr(self, "_prev_keys", None)
+            if prev is None:
+                self._prev_keys = keys
+                return
+
+            mods = pg.key.get_mods()
+            shift = bool(mods & pg.KMOD_SHIFT)
+            caps = bool(mods & pg.KMOD_CAPS)
+
+            def just_pressed(k: int) -> bool:
+                try:
+                    return bool(keys[k]) and (not bool(prev[k]))
+                except Exception:
+                    return False
+
+            def append(ch: str) -> None:
+                if len(self.input_text) < 140:
+                    self.input_text += ch
+
+            # Special keys
+            if just_pressed(pg.K_ESCAPE):
+                self.toggle()
+            if just_pressed(pg.K_BACKSPACE):
+                self.input_text = self.input_text[:-1]
+            if just_pressed(pg.K_RETURN) or just_pressed(pg.K_KP_ENTER):
+                msg = self.input_text.strip()
+                if msg:
+                    chat_log.add("You", msg)
+                    self._try_send_online(online_manager, msg)
+                self.input_text = ""
+                self._prev_keys = keys
+                return
+
+            # Space
+            if just_pressed(pg.K_SPACE):
+                append(" ")
+
+            # Letters
+            for k, ch in [
+                (pg.K_a,"a"),(pg.K_b,"b"),(pg.K_c,"c"),(pg.K_d,"d"),(pg.K_e,"e"),(pg.K_f,"f"),
+                (pg.K_g,"g"),(pg.K_h,"h"),(pg.K_i,"i"),(pg.K_j,"j"),(pg.K_k,"k"),(pg.K_l,"l"),
+                (pg.K_m,"m"),(pg.K_n,"n"),(pg.K_o,"o"),(pg.K_p,"p"),(pg.K_q,"q"),(pg.K_r,"r"),
+                (pg.K_s,"s"),(pg.K_t,"t"),(pg.K_u,"u"),(pg.K_v,"v"),(pg.K_w,"w"),(pg.K_x,"x"),
+                (pg.K_y,"y"),(pg.K_z,"z"),
+            ]:
+                if just_pressed(k):
+                    upper = shift ^ caps
+                    append(ch.upper() if upper else ch)
+
+            # Digits and common punctuation (US layout)
+            num_map = {
+                pg.K_0: ("0", ")"),
+                pg.K_1: ("1", "!"),
+                pg.K_2: ("2", "@"),
+                pg.K_3: ("3", "#"),
+                pg.K_4: ("4", "$"),
+                pg.K_5: ("5", "%"),
+                pg.K_6: ("6", "^"),
+                pg.K_7: ("7", "&"),
+                pg.K_8: ("8", "*"),
+                pg.K_9: ("9", "("),
+            }
+            for k, (a, b) in num_map.items():
+                if just_pressed(k):
+                    append(b if shift else a)
+
+            punct_map = {
+                pg.K_MINUS: ("-", "_"),
+                pg.K_EQUALS: ("=", "+"),
+                pg.K_LEFTBRACKET: ("[", "{"),
+                pg.K_RIGHTBRACKET: ("]", "}"),
+                pg.K_BACKSLASH: ("\\", "|"),
+                pg.K_SEMICOLON: (";", ":"),
+                pg.K_QUOTE: ("'", '"'),
+                pg.K_COMMA: (",", "<"),
+                pg.K_PERIOD: (".", ">"),
+                pg.K_SLASH: ("/", "?"),
+                pg.K_BACKQUOTE: ("`", "~"),
+            }
+            for k, (a, b) in punct_map.items():
+                if just_pressed(k):
+                    append(b if shift else a)
+
+            self._prev_keys = keys
+
+    def draw(self, screen: pg.Surface) -> None:
+        if not self.open:
+            return
+
+        sw, sh = GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT
+        bar_h = 40
+        rect = pg.Rect(10, sh - bar_h - 10, sw - 20, bar_h)
+
+        bg = pg.Surface((rect.width, rect.height), pg.SRCALPHA)
+        bg.fill((0, 0, 0, 160))
+        screen.blit(bg, rect.topleft)
+        pg.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=8)
+
+        font = pg.font.SysFont(None, 24)
+        prompt = "> "
+        txt = self.input_text + ("|" if self._cursor_on else "")
+        surf = font.render(prompt + txt, True, (255, 255, 255))
+        screen.blit(surf, (rect.left + 10, rect.centery - surf.get_height() // 2))
+
+
+
+# =========================
+#   ONLINE AVATAR RENDER
+# =========================
+
+@dataclass
+class _RemoteAvatarState:
+    x: float = 0.0
+    y: float = 0.0
+    dir: str = "DOWN"     # "DOWN" / "LEFT" / "RIGHT" / "UP"
+    frame: int = 0        # 0~3
+    anim_t: float = 0.0   # animation timer
+
+
+class OnlineAvatarRenderer:
+    """Render other online players using a 4x4 character sheet (ow1.png).
+
+    This is a client-side approximation:
+    - Direction is inferred from position delta.
+    - If moving -> animate (frames 1~3), else -> stand (frame 0).
+    """
+
+    def __init__(self, sprite_path: str, size: tuple[int, int]):
+        self.size = size
+
+        # Match project convention: Sprite("character/ow1.png") loads from assets/images
+        full_path = os.path.join("assets", "images", sprite_path)
+        sheet = pg.image.load(full_path).convert_alpha()
+
+        self.cols = 4
+        self.rows = 4
+        self.fw = sheet.get_width() // self.cols
+        self.fh = sheet.get_height() // self.rows
+
+        # row mapping for directions
+        # If your direction looks wrong, swap these row numbers.
+        self.row_for_dir = {
+            "DOWN": 0,
+            "LEFT": 1,
+            "RIGHT": 2,
+            "UP": 3,
+        }
+
+        self.frames: dict[str, list[pg.Surface]] = {k: [] for k in self.row_for_dir.keys()}
+        for d, r in self.row_for_dir.items():
+            for c in range(self.cols):
+                rect = pg.Rect(c * self.fw, r * self.fh, self.fw, self.fh)
+                img = sheet.subsurface(rect).copy()
+                img = pg.transform.smoothscale(img, self.size)
+                self.frames[d].append(img)
+
+        self.states: dict[int, _RemoteAvatarState] = {}
+
+        # animation speed (seconds per frame)
+        self.frame_dt = 0.12
+
+    def update_remote(self, pid: int, x: float, y: float, dt: float) -> None:
+        st = self.states.get(pid)
+        if st is None:
+            self.states[pid] = _RemoteAvatarState(x=float(x), y=float(y))
+            return
+
+        dx = float(x) - st.x
+        dy = float(y) - st.y
+        moved = (abs(dx) + abs(dy)) > 0.01
+
+        if moved:
+            # choose the dominant axis to determine direction
+            if abs(dx) >= abs(dy):
+                st.dir = "RIGHT" if dx > 0 else "LEFT"
+            else:
+                st.dir = "DOWN" if dy > 0 else "UP"
+
+            st.anim_t += dt
+            if st.anim_t >= self.frame_dt:
+                st.anim_t = 0.0
+                st.frame = (st.frame + 1) % 4
+                if st.frame == 0:
+                    st.frame = 1  # avoid standing frame while moving
+        else:
+            st.anim_t = 0.0
+            st.frame = 0  # standing
+
+        st.x = float(x)
+        st.y = float(y)
+
+    def prune_not_in(self, alive_ids: set[int]) -> None:
+        for pid in list(self.states.keys()):
+            if pid not in alive_ids:
+                self.states.pop(pid, None)
+
+    def draw(self, screen: pg.Surface, pid: int, screen_x: float, screen_y: float) -> None:
+        st = self.states.get(pid)
+        if st is None:
+            return
+        img = self.frames.get(st.dir, self.frames["DOWN"])[st.frame]
+        screen.blit(img, (int(screen_x), int(screen_y)))
+
+
+# =========================
 #           SCENE
 # =========================
 class GameScene(Scene):
     game_manager: GameManager
     online_manager: OnlineManager | None
-    sprite_online: Sprite
+    _online_avatar: OnlineAvatarRenderer
 
     setting_button: Button
     overlay_close_button: Button
     bottom_buttons: list[Button]
     is_setting_open: bool
+    call_dr_button: TextButton
     panel_rect: pg.Rect
 
     bag_button: Button
@@ -385,8 +849,8 @@ class GameScene(Scene):
         else:
             self.online_manager = None
 
-        self.sprite_online = Sprite(
-            "ingame_ui/options1.png",
+        self._online_avatar = OnlineAvatarRenderer(
+            "character/ow1.png",
             (GameSettings.TILE_SIZE, GameSettings.TILE_SIZE)
         )
 
@@ -398,8 +862,15 @@ class GameScene(Scene):
         self.is_setting_open = False
         self.is_bag_open = False
 
+
+        # bag overlay click edge trigger
+        self._bag_prev_mouse_down: bool = False
         self.is_shop_open = False
         self.shop_overlay = None
+
+        # chat
+        self.chat_overlay = ChatOverlay()
+        self.chat_log = ChatLog(max_lines=40)
 
         # navigation overlay
         self.is_nav_open: bool = False
@@ -466,6 +937,18 @@ class GameScene(Scene):
             480, 420
         )
 
+
+        # Text-only button inside Setting overlay (Call Dr. -> DrScene)
+        # NOTE: you must register scene name "dr" in your scene manager.
+        self.call_dr_button = TextButton(
+            "CALL DR.",
+            self.panel_rect.left + 40,
+            self.panel_rect.top + 120,
+            self.panel_rect.width - 80,
+            50,
+            lambda: DrScene.open() if DrScene is not None else None,
+        )
+
         # Save / Load / Menu
         btn_size = 80
         gap = 20
@@ -512,7 +995,40 @@ class GameScene(Scene):
         # E edge trigger（給 ShopNPC 互動用）
         self._prev_e: bool = False
 
+        # ✅ online sync throttle (avoid POST every frame)
+        self._online_send_acc: float = 0.0
+        self._online_send_interval: float = 0.1  # 10Hz
 
+
+
+    # =========================
+    # Overlay panel rect helpers
+    # =========================
+    def _get_setting_panel_rect(self) -> pg.Rect:
+        """Setting overlay uses the existing self.panel_rect."""
+        return self.panel_rect
+
+    def _get_bag_panel_rect(self) -> pg.Rect:
+        """Bag overlay uses a larger panel rect, centered on screen."""
+        sw, sh = GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT
+        r = pg.Rect(0, 0, 900, 520)
+        r.center = (sw // 2, sh // 2)
+        return r
+
+    def _sync_overlay_close_button(self, panel_rect: pg.Rect) -> None:
+        """Keep the X button anchored to the top-right corner of the given overlay panel."""
+        close_size = 40
+        padding = 10
+        x = panel_rect.right - close_size - padding
+        y = panel_rect.top + padding
+        # Button class in this project uses x/y/w/h fields via rect; keep both updated if present.
+        if hasattr(self.overlay_close_button, "rect"):
+            self.overlay_close_button.rect = pg.Rect(x, y, close_size, close_size)
+        # some Button implementations store x/y
+        if hasattr(self.overlay_close_button, "x"):
+            self.overlay_close_button.x = x
+        if hasattr(self.overlay_close_button, "y"):
+            self.overlay_close_button.y = y
     # =========================
     # Navigation Overlay Open
     # =========================
@@ -950,6 +1466,20 @@ class GameScene(Scene):
         self.bag_button.update(dt)
         self.nav_button.update(dt)
 
+        # Dr overlay (highest priority)
+        if DrScene is not None and hasattr(DrScene, "is_open") and DrScene.is_open():
+            try:
+                DrScene.update(dt)
+            except Exception:
+                pass
+            return
+
+        # chat (press T to toggle). While chat is open, pause gameplay input.
+        if not (self.is_nav_open or self.is_shop_open or self.is_setting_open or self.is_bag_open):
+            self.chat_overlay.update(dt, self.online_manager, self.chat_log)
+            if self.chat_overlay.open:
+                return
+
         # NAV overlay (high priority)
         if self.is_nav_open and self.nav_overlay and self.nav_overlay.open:
             self.nav_overlay.update(dt)
@@ -974,17 +1504,46 @@ class GameScene(Scene):
             for btn in self.bottom_buttons:
                 btn.update(dt)
 
+            self._sync_overlay_close_button(self._get_setting_panel_rect())
             self.overlay_close_button.update(dt)
+            self.call_dr_button.update(dt)
             SettingScene.handle_panel_input(self.panel_rect)
             return
 
         # bag overlay
         if self.is_bag_open:
-            if pg.key.get_pressed()[pg.K_ESCAPE]:
-                self.is_bag_open = False
-            self.overlay_close_button.update(dt)
-            return
+            keys = pg.key.get_pressed()
 
+            # If EvoScene popup is open, ESC closes it first (so bag stays open).
+            if keys[pg.K_ESCAPE]:
+                if EvoScene is not None and hasattr(EvoScene, "is_open") and EvoScene.is_open():
+                    try:
+                        EvoScene.close()
+                    except Exception:
+                        pass
+                else:
+                    self.is_bag_open = False
+
+            bag_rect = self._get_bag_panel_rect()
+            self._sync_overlay_close_button(bag_rect)
+
+            # Update X button
+            self.overlay_close_button.update(dt)
+
+            # Mouse left click edge: route click to EvoScene (if open) else BagScene
+            mouse_down = bool(pg.mouse.get_pressed(num_buttons=3)[0])
+            if mouse_down and (not self._bag_prev_mouse_down):
+                pos = pg.mouse.get_pos()
+                if EvoScene is not None and hasattr(EvoScene, "is_open") and EvoScene.is_open():
+                    try:
+                        EvoScene.handle_click(pos)
+                    except Exception:
+                        pass
+                else:
+                    BagScene.handle_click(pos, self.game_manager.bag)
+
+            self._bag_prev_mouse_down = mouse_down
+            return
         # original game logic
         if self.game_manager.player:
             self.game_manager.player.update(dt)
@@ -1014,12 +1573,32 @@ class GameScene(Scene):
 
         self.game_manager.bag.update(dt)
 
+        # ✅ Online: send my position at 10Hz (not every frame)
         if self.game_manager.player and self.online_manager:
-            self.online_manager.update(
+            map_name = os.path.basename(self.game_manager.current_map.path_name).lower()
+            self.online_manager.set_local_state(
                 self.game_manager.player.position.x,
                 self.game_manager.player.position.y,
-                self.game_manager.current_map.path_name
+                map_name
             )
+
+        # ✅ Online: update remote avatars (direction + animation)
+        if self.online_manager:
+            alive: set[int] = set()
+            for p in self.online_manager.get_list_players():
+                try:
+                    pid = int(p.get("id", -1))
+                except Exception:
+                    continue
+                if pid < 0:
+                    continue
+                alive.add(pid)
+                try:
+                    self._online_avatar.update_remote(pid, float(p["x"]), float(p["y"]), dt)
+                except Exception:
+                    pass
+            self._online_avatar.prune_not_in(alive)
+
 
         # -------- map switching (keep your original logic) --------
         before_map = getattr(self.game_manager.current_map, "path_name", None)
@@ -1081,14 +1660,25 @@ class GameScene(Scene):
 
         # online players
         if self.online_manager and self.game_manager.player:
+            cur_map = os.path.basename(self.game_manager.current_map.path_name).lower()
             list_online = self.online_manager.get_list_players()
             for player in list_online:
-                if player["map"] == self.game_manager.current_map.path_name:
+                p_map = os.path.basename(str(player.get("map", ""))).lower()
+                if p_map == cur_map:
                     pos = camera.transform_position_as_position(
                         Position(player["x"], player["y"])
                     )
-                    self.sprite_online.update_pos(pos)
-                    self.sprite_online.draw(screen)
+                    try:
+                        pid = int(player.get("id", -1))
+                    except Exception:
+                        pid = -1
+                    if pid >= 0:
+                        self._online_avatar.draw(screen, pid, pos.x, pos.y)
+
+        # chat messages (bottom-left)
+        if not (self.is_setting_open or self.is_bag_open or self.is_shop_open or self.is_nav_open):
+            self.chat_log.draw(screen)
+            self.chat_overlay.draw(screen)
 
         # top-right buttons
         self.setting_button.draw(screen)
@@ -1116,14 +1706,61 @@ class GameScene(Scene):
                     back_button=None,
                     bottom_buttons=self.bottom_buttons
                 )
+                # Draw Call Dr. button on top of the setting panel
+                self.call_dr_button.draw(screen)
+                self._sync_overlay_close_button(self._get_setting_panel_rect())
             elif self.is_bag_open:
-                BagScene.draw_panel(
-                    screen,
-                    self.panel_rect,
-                    self.game_manager.bag
-                )
+                # ✅ Dim background
+                overlay = pg.Surface((GameSettings.SCREEN_WIDTH, GameSettings.SCREEN_HEIGHT), pg.SRCALPHA)
+                overlay.fill((0, 0, 0, 120))
+                screen.blit(overlay, (0, 0))
 
-            self.overlay_close_button.draw(screen)
+                # ✅ Bag panel rect
+                bag_rect = pg.Rect(0, 0, 900, 520)
+                bag_rect.center = (GameSettings.SCREEN_WIDTH // 2, GameSettings.SCREEN_HEIGHT // 2)
+
+                # ✅ Bag panel background (BagScene 不畫背景)
+                base_orange = (247, 182, 60)
+                border_orange = (205, 132, 40)
+                bottom_shadow = (222, 137, 38)
+
+                pg.draw.rect(screen, base_orange, bag_rect, border_radius=12)
+                pg.draw.rect(screen, border_orange, bag_rect, 4, border_radius=12)
+
+                shadow_rect = pg.Rect(bag_rect.left + 4, bag_rect.bottom - 10, bag_rect.width - 8, 6)
+                pg.draw.rect(screen, bottom_shadow, shadow_rect, border_radius=6)
+
+                # ✅ Bag contents
+                BagScene.draw_panel(screen, bag_rect, self.game_manager.bag)
+
+                # ✅ EvoScene popup (opened by Evolution Potion USE)
+                if EvoScene is not None and hasattr(EvoScene, "is_open") and EvoScene.is_open():
+                    try:
+                        EvoScene.draw(screen, bag_rect.center)
+                    except Exception:
+                        pass
+
+                # ✅ 固定叉叉座標（相對 bag_rect）
+                self.overlay_close_button.x = bag_rect.right - 60
+                self.overlay_close_button.y = bag_rect.top + 24
+                if hasattr(self.overlay_close_button, "rect"):
+                    try:
+                        self.overlay_close_button.rect.topleft = (self.overlay_close_button.x, self.overlay_close_button.y)
+                    except Exception:
+                        pass
+                if hasattr(self.overlay_close_button, "button_rect"):
+                    try:
+                        self.overlay_close_button.button_rect.topleft = (self.overlay_close_button.x, self.overlay_close_button.y)
+                    except Exception:
+                        pass
+                if hasattr(self.overlay_close_button, "hitbox"):
+                    try:
+                        self.overlay_close_button.hitbox.topleft = (self.overlay_close_button.x, self.overlay_close_button.y)
+                    except Exception:
+                        pass
+
+                # ✅ Draw X on top
+                self.overlay_close_button.draw(screen)
 
         # enemy confirm dialog must be topmost
         for enemy in self.game_manager.current_enemy_trainers:
@@ -1154,6 +1791,16 @@ class GameScene(Scene):
             pg.draw.rect(screen, (255, 255, 255), rect)
             pg.draw.rect(screen, (0, 0, 0), rect, 2)
             screen.blit(surf, (x + pad_x, y + pad_y))
+        # Dr overlay (draw on top of everything)
+        if DrScene is not None and hasattr(DrScene, "is_open") and DrScene.is_open():
+            try:
+                DrScene.draw(
+                    screen,
+                    (GameSettings.SCREEN_WIDTH // 2, GameSettings.SCREEN_HEIGHT // 2),
+                )
+            except Exception:
+                pass
+
 
     # =========================
     # Bush / Pokemon grass

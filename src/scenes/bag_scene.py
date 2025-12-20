@@ -4,6 +4,13 @@ import pygame as pg
 
 from src.scenes.scene import Scene
 
+# ✅ Evo overlay (Evolution Potion)
+_evo_import_error: str | None = None
+try:
+    from src.scenes.evo_scene import EvoScene  # type: ignore
+except Exception as e:
+    EvoScene = None  # type: ignore
+    _evo_import_error = repr(e)
 
 class BagScene(Scene):
     """
@@ -14,8 +21,10 @@ class BagScene(Scene):
 
     _icon_cache: dict[tuple[str, tuple[int, int]], pg.Surface] = {}
     _potion_hitbox: pg.Rect | None = None
-    _show_no_item_popup: bool = False
-
+    _evo_use_hitbox: pg.Rect | None = None
+    _show_no_item_popup: bool = False 
+    _prev_mouse_down: bool = False
+    _prev_esc: bool = False
     # 路徑常數（如果你的專案路徑不一樣，改這裡）
     UI_BASE_PATH = "assets/images/UI/raw/"
     MONSTER_BANNER = UI_BASE_PATH + "UI_Flat_Banner03a.png"
@@ -45,7 +54,76 @@ class BagScene(Scene):
             print(f"[BagScene] Failed to load image '{path}': {e}")
             return None
 
+
     # -------------------------------------------------
+    # Helpers: normalize name & get count by aliases
+    # -------------------------------------------------
+    @staticmethod
+    def _norm_name(s: str) -> str:
+        return str(s).strip().lower().replace("_", " ")
+
+    @staticmethod
+    def _get_item_count_any(bag, aliases: list[str]) -> int:
+        items = getattr(bag, "_items_data", [])
+        want = {BagScene._norm_name(a) for a in aliases}
+        for it in items:
+            if BagScene._norm_name(it.get("name", "")) in want:
+                try:
+                    return int(it.get("count", 0))
+                except Exception:
+                    return 0
+        return 0
+
+    
+    # -------------------------------------------------
+    # 事件：輪詢式更新（不需要 GameScene 的 event loop）
+    # -------------------------------------------------
+    @staticmethod
+    def update(dt: float, bag) -> None:
+        """
+        ✅ 你現在的 GameScene 沒有把滑鼠事件轉進來（所以按鈕會「看起來不能按」）。
+        所以 BagScene 改成「輪詢式」：在 GameScene 的 update()、bag overlay 開啟時呼叫即可。
+
+        在 GameScene.update 的 bag overlay 區塊加這行就好：
+            BagScene.update(dt, self.game_manager.bag)
+
+        功能：
+        - 滑鼠左鍵「按下的那一刻」(edge) 觸發點擊
+        - 如果 EvoScene 已開啟，優先把點擊交給 EvoScene
+        - ESC：若 EvoScene 開著先關 EvoScene，否則由 GameScene 自己關 bag overlay（你原本就有）
+        """
+        # ESC edge（只處理 EvoScene 的關閉；bag overlay 的關閉你原本在 GameScene 做了）
+        keys = pg.key.get_pressed()
+        esc_now = bool(keys[pg.K_ESCAPE])
+        if esc_now and (not BagScene._prev_esc):
+            if EvoScene is not None and hasattr(EvoScene, "is_open") and EvoScene.is_open():
+                EvoScene.close()
+        BagScene._prev_esc = esc_now
+
+        # Let EvoScene do its own polling (ESC, timers)
+        if EvoScene is not None and hasattr(EvoScene, "update") and EvoScene.is_open():
+            try:
+                EvoScene.update(dt)
+            except Exception:
+                pass
+
+        # mouse click edge
+        mouse_now = bool(pg.mouse.get_pressed(num_buttons=3)[0])
+        if mouse_now and (not BagScene._prev_mouse_down):
+            pos = pg.mouse.get_pos()
+
+            # if evo overlay open -> forward click
+            if EvoScene is not None and hasattr(EvoScene, "is_open") and EvoScene.is_open():
+                try:
+                    EvoScene.handle_click(pos)
+                except Exception as e:
+                    print(f"[BagScene] EvoScene.handle_click error: {e}")
+            else:
+                BagScene.handle_click(pos, bag)
+
+        BagScene._prev_mouse_down = mouse_now
+
+# -------------------------------------------------
     # 事件：處理滑鼠點擊（GameScene 可以在滑鼠按下時呼叫）
     # -------------------------------------------------
     @staticmethod
@@ -54,31 +132,43 @@ class BagScene(Scene):
         在 GameScene 的事件迴圈中：
             if self.is_bag_open and event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
                 BagScene.handle_click(event.pos, self.game_manager.bag)
+
+        ✅ 本版支援：
+        - Potion 點擊（原本功能保留）
+        - Evolution Potion 的 USE 按鈕：按下會開啟 EvoScene（進化選擇視窗）
+          （EvoScene 需要在 GameScene 另外呼叫 draw / handle_click）
         """
-        # 如果目前有跳出「沒有道具」的視窗，就先把視窗關掉
+
+        # 1) 沒有道具 popup：點一下關閉
         if BagScene._show_no_item_popup:
             BagScene._show_no_item_popup = False
             return
 
-        # 沒有設定過 hitbox，就不用處理
-        if not BagScene._potion_hitbox:
+        # 2) Evolution Potion USE：改成「跳到 / 開啟 EvoScene」
+        if BagScene._evo_use_hitbox and BagScene._evo_use_hitbox.collidepoint(mouse_pos):
+            evo_cnt = BagScene._get_item_count_any(
+                bag, ["evolution potion", "evo potion", "evolution_potion"]
+            )
+            if evo_cnt <= 0:
+                BagScene._show_no_item_popup = True
+                return
+
+            # ✅ 打開 EvoScene overlay
+            if EvoScene is not None:
+                EvoScene.open(bag)
+            else:
+                print(f"[BagScene] EvoScene import failed: {_evo_import_error}")
             return
 
-        # 點到 Potion 行
-        if BagScene._potion_hitbox.collidepoint(mouse_pos):
-            items = getattr(bag, "_items_data", [])
-            potion_count = 0
-            for it in items:
-                if it.get("name", "").lower() == "potion":
-                    potion_count = it.get("count", 0)
-                    break
-
+        # 3) Potion（整列點擊）
+        if BagScene._potion_hitbox and BagScene._potion_hitbox.collidepoint(mouse_pos):
+            potion_count = BagScene._get_item_count_any(bag, ["potion"])
             if potion_count <= 0:
-                # 沒藥水 -> 顯示提醒視窗
                 BagScene._show_no_item_popup = True
             else:
-                # 這裡可以依照你自己的邏輯去扣道具 / 回血
                 print("[BagScene] Potion clicked. TODO: implement heal & decrease count.")
+            return
+
 
     # -------------------------------------------------
     # 繪圖：背包面板
@@ -87,6 +177,7 @@ class BagScene(Scene):
     def draw_panel(screen: pg.Surface, panel_rect: pg.Rect, bag) -> None:
         # 每次重畫時先清掉 Potion hitbox
         BagScene._potion_hitbox = None
+        BagScene._evo_use_hitbox = None
 
         # === 背景：橘色面板 ===
         base_orange = (247, 182, 60)
@@ -217,7 +308,7 @@ class BagScene(Scene):
                 )
 
         # -------------------------------------------------
-        # 右邊：道具列表（圖示 + 名稱 + 數量）
+        # 右邊：道具列表（圖示 + 名稱 + USE + 數量）
         # -------------------------------------------------
         item_area_x = panel_rect.left + int(panel_rect.width * 0.60)
         item_area_y = content_top + 8
@@ -230,34 +321,35 @@ class BagScene(Scene):
             "coin": BagScene.COIN_ICON,
             "pokeball": BagScene.BALL_ICON,
             "ball": BagScene.BALL_ICON,
+            "evolution potion": BagScene.POTION_ICON,
+            "evo potion": BagScene.POTION_ICON,
         }
+
+        # 欄位位置（避免黏在一起）
+        icon_size_item = 24
+        qty_col_right = panel_rect.right - 40               # 數量欄靠右
+        use_col_right = qty_col_right - 90                  # USE 按鈕欄
+        name_col_left = item_area_x + icon_size_item + 12   # 名稱欄開始
 
         for i, item in enumerate(items[:6]):
             row_y = item_area_y + i * line_height
-
-            name_item = item.get("name", "")
+            name_item = str(item.get("name", ""))
             qty = item.get("count", 1)
 
-            icon_size_item = 24
-            icon_rect_item = pg.Rect(
-                item_area_x, row_y, icon_size_item, icon_size_item
-            )
+            # icon rect
+            icon_rect_item = pg.Rect(item_area_x, row_y, icon_size_item, icon_size_item)
 
             # 先看 item 自己有沒有 sprite_path，沒有就用預設 mapping
             sprite_rel_item = item.get("sprite_path", "")
-            sprite_path_item: str | None
-
             if sprite_rel_item:
                 sprite_path_item = f"assets/images/{sprite_rel_item}"
             else:
-                key = name_item.lower()
+                key = BagScene._norm_name(name_item)
                 sprite_path_item = default_item_icons.get(key)
 
             icon_surf_item = None
             if sprite_path_item:
-                icon_surf_item = BagScene._load_image(
-                    sprite_path_item, (icon_size_item, icon_size_item)
-                )
+                icon_surf_item = BagScene._load_image(sprite_path_item, (icon_size_item, icon_size_item))
 
             if icon_surf_item:
                 screen.blit(icon_surf_item, icon_rect_item.topleft)
@@ -266,24 +358,45 @@ class BagScene(Scene):
                 pg.draw.circle(screen, (240, 240, 240), center)
                 pg.draw.circle(screen, (120, 120, 120), center, 2)
 
-            # 文字垂直置中，對齊小圖
-            text_name = small_font.render(str(name_item), True, (40, 40, 40))
-            tn_y = row_y + (icon_size_item - text_name.get_height()) // 2
-            screen.blit(text_name, (icon_rect_item.right + 8, tn_y))
+            # 名稱（太長就截斷，避免撞到 USE/數量）
+            display_name = name_item
+            max_name_px = (use_col_right - 14) - name_col_left
+            if small_font.size(display_name)[0] > max_name_px:
+                while display_name and small_font.size(display_name + "...")[0] > max_name_px:
+                    display_name = display_name[:-1]
+                display_name = display_name + "..."
 
+            text_name = small_font.render(display_name, True, (40, 40, 40))
+            tn_y = row_y + (icon_size_item - text_name.get_height()) // 2
+            screen.blit(text_name, (name_col_left, tn_y))
+
+            # 數量（固定靠右）
             qty_text = small_font.render(f"x{qty}", True, (40, 40, 40))
-            qty_x = panel_rect.right - 40 - qty_text.get_width()
+            qty_x = qty_col_right - qty_text.get_width()
             qty_y = row_y + (icon_size_item - qty_text.get_height()) // 2
             screen.blit(qty_text, (qty_x, qty_y))
 
-            # 如果是 Potion，記錄一個比較大的 hitbox，當作按鈕區域
-            if name_item.lower() == "potion":
-                # 讓整列都可以點（icon ~ 數量文字）
+            # Potion：整列可點（保留你原本設計）
+            if BagScene._norm_name(name_item) == "potion":
                 hit_x = icon_rect_item.left
                 hit_y = row_y
-                hit_w = qty_x + qty_text.get_width() - hit_x
+                hit_w = (qty_x + qty_text.get_width()) - hit_x
                 hit_h = line_height
                 BagScene._potion_hitbox = pg.Rect(hit_x, hit_y, hit_w, hit_h)
+
+            # Evolution Potion：顯示 USE 按鈕
+            if BagScene._norm_name(name_item) in ("evolution potion", "evo potion"):
+                use_w, use_h = 56, 22
+                use_x = use_col_right - use_w
+                use_y = row_y + (icon_size_item - use_h) // 2 + 1
+                use_rect = pg.Rect(use_x, use_y, use_w, use_h)
+
+                pg.draw.rect(screen, (250, 240, 200), use_rect, border_radius=6)
+                pg.draw.rect(screen, (120, 90, 40), use_rect, 2, border_radius=6)
+                use_txt = mini_font.render("USE", True, (40, 40, 40))
+                screen.blit(use_txt, use_txt.get_rect(center=use_rect.center))
+
+                BagScene._evo_use_hitbox = use_rect
 
         if not items:
             no_item_text = small_font.render("No items", True, (100, 100, 100))
@@ -337,3 +450,13 @@ class BagScene(Scene):
             msg_x = icon_rect.right + 10
             msg_y = popup_rect.centery - msg_text.get_height() // 2
             screen.blit(msg_text, (msg_x, msg_y))
+
+
+        # -------------------------------------------------
+        # Evo overlay（如果開啟，就畫在最上層）
+        # -------------------------------------------------
+        if EvoScene is not None and hasattr(EvoScene, "is_open") and EvoScene.is_open():
+            try:
+                EvoScene.draw(screen, center=screen.get_rect().center)
+            except Exception as e:
+                print(f"[BagScene] EvoScene.draw error: {e}")

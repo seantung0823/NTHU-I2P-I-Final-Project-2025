@@ -3,6 +3,7 @@
 from __future__ import annotations
 import math
 import re
+import secrets
 import pygame as pg
 from typing import override, TYPE_CHECKING
 
@@ -24,31 +25,59 @@ ELEMENT_CHART = {
     "Grass": {"strong": ["Water"], "weak": ["Fire"]},
 }
 
-# =========================
-#   EVOLUTION SYSTEM
-# =========================
-# 你提供的進化關係：
-# 1→2→3
-# 4/5/6 不會變化
-# 7→8→9
-# 10/11 不會變化
-# 12→13→14
-# 15→16
-EVOLUTION_NEXT: dict[int, int] = {
-    1: 2,
-    2: 3,
-    7: 8,
-    8: 9,
-    12: 13,
-    13: 14,
-    15: 16,
+
+# -------------------------
+# Element inference by species_id (your mapping)
+# -------------------------
+SPECIES_ELEMENT: dict[int, str] = {
+    # Grass
+    1: "Grass", 2: "Grass", 3: "Grass", 4: "Grass", 5: "Grass", 15: "Grass", 16: "Grass",
+    # Water
+    6: "Water", 12: "Water", 13: "Water", 14: "Water",
+    # Fire
+    7: "Fire", 8: "Fire", 9: "Fire", 10: "Fire", 11: "Fire",
 }
+
+
+def infer_element_from_mon(mon: dict) -> str | None:
+    """Infer element from a monster dict using (1) explicit 'element' then (2) species_id/sprite number mapping."""
+    ele = mon.get("element")
+    if isinstance(ele, str) and ele.strip():
+        return ele.strip()
+
+    # try infer species id from fields that already exist in this project
+    sid = mon.get("species_id")
+    if not isinstance(sid, int) or sid <= 0:
+        sp = str(mon.get("sprite_path", "") or mon.get("sprite", "") or mon.get("battle_sprite", "") or "")
+        m0 = re.search(r"menusprite(\d+)\.png", sp, re.IGNORECASE)
+        if m0:
+            try:
+                sid = int(m0.group(1))
+            except Exception:
+                sid = None
+        if not isinstance(sid, int):
+            m1 = re.search(r"sprite(\d+)", sp, re.IGNORECASE)
+            if m1:
+                try:
+                    sid = int(m1.group(1))
+                except Exception:
+                    sid = None
+
+    if isinstance(sid, int) and sid in SPECIES_ELEMENT:
+        return SPECIES_ELEMENT[sid]
+    return None
+
 
 
 def battle_idle_sprite(species_id: int) -> str:
     """Animation 用：相對於 assets/images/ 的路徑"""
     return f"sprites/sprite{species_id}_idle.png"
 
+
+
+
+# Enemy species pool (your request)
+ENEMY_SPECIES_POOL: list[int] = [3, 12, 9]
 
 def menu_icon_sprite(species_id: int) -> str:
     """Switch panel 用：相對於 assets/images/ 的路徑"""
@@ -77,7 +106,6 @@ class BattleScene(Scene):
     ✅ 新增：
     - 元素剋制：Water/Fire/Grass（可從 monster dict 的 "element" 讀）
     - 三種道具：Heal / Strength / Defense
-    - 進化：打贏後依照 EVOLUTION_NEXT 進化，換資源並提升數值
     """
 
     background: BackgroundSprite
@@ -142,15 +170,18 @@ class BattleScene(Scene):
         self.enemy_max_hp = 80
         self.enemy_hp = self.enemy_max_hp
 
-        self.player_attack_power = 30
+        self.player_attack_power = 15
         self.enemy_attack_power = 20
 
+
+        # remember last random enemy to reduce repeats
+        self._enemy_last_sid: int | None = None
         # 用來記錄目前玩家的 sprite 編號（進化要用）
         self.player_species_id: int | None = 1
 
         # ---------- 元素屬性 ----------
         self.player_element: str = "Water"
-        self.enemy_element: str = "Fire"
+        self.enemy_element: str = infer_element_from_mon({"battle_sprite": "sprites/sprite8_idle.png"}) or "Fire"
 
         # ---------- 三種道具 Buff（每場戰鬥重置） ----------
         self.attack_buff: int = 0  # Strength Potion
@@ -207,10 +238,67 @@ class BattleScene(Scene):
         )
 
     # -------------------------------------------------
+    # Bag binding (guarantee BattleScene reads the SAME bag as BagScene)
+    # -------------------------------------------------
+    def _ensure_bag(self) -> None:
+        """Best-effort to attach a Bag instance if caller forgot to pass it in.
+
+        BattleScene should be created with BattleScene(bag=self.game_manager.bag).
+        But to make it robust (and match your request: "保證可以抓背包資料"),
+        we try to discover the bag from SceneManager / GameScene at runtime.
+
+        This will NOT create fake data; it only tries to find the existing bag object.
+        """
+        if self.bag is not None:
+            return
+
+        candidates = []
+
+        # Common "current scene" patterns
+        for attr in ("current_scene", "scene", "_scene", "active_scene"):
+            s = getattr(scene_manager, attr, None)
+            if s is not None:
+                candidates.append(s)
+
+        # Common "get scene by name" patterns
+        for meth in ("get_scene", "get", "find_scene"):
+            fn = getattr(scene_manager, meth, None)
+            if callable(fn):
+                try:
+                    s = fn("game")
+                    if s is not None:
+                        candidates.append(s)
+                except Exception:
+                    pass
+
+        # Common "scenes dict" patterns
+        for attr in ("scenes", "_scenes"):
+            d = getattr(scene_manager, attr, None)
+            if isinstance(d, dict):
+                for key in ("game", "GameScene"):
+                    s = d.get(key)
+                    if s is not None:
+                        candidates.append(s)
+
+        # Try to locate bag from any candidate
+        for s in candidates:
+            gm = getattr(s, "game_manager", None)
+            if gm is not None:
+                b = getattr(gm, "bag", None)
+                if b is not None:
+                    self.bag = b
+                    return
+            b = getattr(s, "bag", None)
+            if b is not None:
+                self.bag = b
+                return
+
+    # -------------------------------------------------
     # Scene lifecycle
     # -------------------------------------------------
     @override
     def enter(self) -> None:
+        self._ensure_bag()
         self.transition_timer = 0.0
         self.enemy_zoom_timer = 0.0
         self.player_zoom_timer = 0.0
@@ -240,8 +328,8 @@ class BattleScene(Scene):
             self.player_max_hp = max_hp
             self.player_hp = cur_hp
 
-            # 元素
-            ele = active.get("element")
+            # 元素（若 monster 沒寫 element，就依 species_id/sprite 自動推斷）
+            ele = infer_element_from_mon(active)
             if isinstance(ele, str) and ele:
                 self.player_element = ele
 
@@ -263,6 +351,21 @@ class BattleScene(Scene):
             self.player_species_id = self._infer_species_id({"name": self.player_name})
             self._update_player_anim_for_name(self.player_name)
 
+        
+        # -------------------------------------------------
+        # Enemy setup (random from ENEMY_SPECIES_POOL every battle enter)
+        # -------------------------------------------------
+        sid_e = self._pick_enemy_species()
+        self.enemy_name = f"sprite{sid_e}"
+        self.enemy_anim = Animation(
+            battle_idle_sprite(sid_e),
+            rows=["idle"],
+            n_keyframes=4,
+            size=(GameSettings.TILE_SIZE * 3, GameSettings.TILE_SIZE * 3),
+            loop=0.6,
+        )
+        self.enemy_anim.switch("idle")
+        self.enemy_element = infer_element_from_mon({"species_id": sid_e, "battle_sprite": battle_idle_sprite(sid_e)}) or self.enemy_element
         self.enemy_hp = self.enemy_max_hp
 
         # 播戰鬥 BGM
@@ -314,8 +417,6 @@ class BattleScene(Scene):
                 self.action_timer = 0.0
 
                 if self.enemy_hp <= 0:
-                    # ✅ WIN → 嘗試進化
-                    self._try_evolve()
                     self.battle_result = "WIN"
                     self.message = "You win!"
                     self.phase = "END"
@@ -357,7 +458,7 @@ class BattleScene(Scene):
         if not chart:
             return 1.0
         if target in chart["strong"]:
-            return 1.5
+            return 1.2
         if target in chart["weak"]:
             return 0.5
         return 1.0
@@ -369,14 +470,23 @@ class BattleScene(Scene):
         """
         推斷 sprite 編號：
         優先 mon["species_id"] (int)
-        再看 mon["sprite_path"] 裡有沒有 sprite12
-        再看 mon["name"] 裡的數字
+        再看 sprite_path / sprite 裡有沒有：
+        - menusprite12.png
+        - sprite12
+        再看 name 裡的數字
         """
         sid = mon.get("species_id")
         if isinstance(sid, int) and sid > 0:
             return sid
 
-        sp = str(mon.get("sprite_path", ""))
+        sp = str(mon.get("sprite_path", "") or mon.get("sprite", "") or "")
+
+        # ✅ NEW: menusprite(\d+).png
+        m0 = re.search(r"menusprite(\d+)\.png", sp, re.IGNORECASE)
+        if m0:
+            return int(m0.group(1))
+
+        # 原本的 sprite(\d+)
         m = re.search(r"sprite(\d+)", sp, re.IGNORECASE)
         if m:
             return int(m.group(1))
@@ -388,59 +498,34 @@ class BattleScene(Scene):
 
         return None
 
-    def _apply_evolution_stats(self) -> None:
+
+
+
+
+
+
+
+
+    def _pick_enemy_species(self) -> int:
+        """Pick an enemy species id from ENEMY_SPECIES_POOL.
+        Uses secrets.choice so it won't be affected by random.seed().
+        If pool has >=2, try to avoid picking the same one twice in a row.
         """
-        進化後數值提升（你可調）：
-        HP +25%，ATK +20%
-        """
-        self.player_max_hp = max(self.player_max_hp + 1, int(self.player_max_hp * 1.25))
-        self.player_attack_power = max(
-            self.player_attack_power + 1, int(self.player_attack_power * 1.20)
-        )
-        self.player_hp = self.player_max_hp
+        pool = [int(x) for x in ENEMY_SPECIES_POOL if int(x) > 0]
+        if not pool:
+            return 8
+        if len(pool) == 1:
+            self._enemy_last_sid = pool[0]
+            return pool[0]
 
-    def _evolve_to_species(self, new_sid: int) -> None:
-        """換名字、換動畫、提升數值、同步回 Bag 資料"""
-        self.player_species_id = new_sid
-        self.player_name = f"sprite{new_sid}"
-
-        # 數值提升
-        self._apply_evolution_stats()
-
-        # 換戰鬥動畫
-        self.player_anim = Animation(
-            battle_idle_sprite(new_sid),
-            rows=["idle"],
-            n_keyframes=4,
-            size=(GameSettings.TILE_SIZE * 3, GameSettings.TILE_SIZE * 3),
-            loop=0.6,
-        )
-        self.player_anim.switch("idle")
-
-        # 同步寫回 Bag active monster（讓你回到遊戲時也維持進化）
-        party = self._get_party()
-        if party and 0 <= self.active_party_index < len(party):
-            mon = party[self.active_party_index]
-            mon["species_id"] = new_sid
-            mon["name"] = f"sprite{new_sid}"
-            # menu icon（Switch panel 用）
-            mon["sprite_path"] = menu_icon_sprite(new_sid)
-            # 同步血量
-            mon["max_hp"] = self.player_max_hp
-            mon["hp"] = self.player_hp
-            # 如果你有把 attack 存在 monster dict，也同步
-            mon["attack"] = self.player_attack_power
-
-    def _try_evolve(self) -> None:
-        cur = self.player_species_id
-        if cur is None:
-            return
-        nxt = EVOLUTION_NEXT.get(cur)
-        if not nxt:
-            return
-        self._evolve_to_species(nxt)
-        self.message = f"{self.player_name} evolved!"
-
+        # avoid repeats if possible
+        sid = secrets.choice(pool)
+        tries = 0
+        while self._enemy_last_sid is not None and sid == self._enemy_last_sid and tries < 6:
+            sid = secrets.choice(pool)
+            tries += 1
+        self._enemy_last_sid = sid
+        return sid
     # -------------------------------------------------
     # 玩家選擇回合
     # -------------------------------------------------
@@ -627,46 +712,64 @@ class BattleScene(Scene):
     # -------------------------------------------------
     # Bag helpers + Party helpers
     # -------------------------------------------------
-    def _get_item_count(self, name: str) -> int:
-        if not self.bag:
-            return 999
-        items = getattr(self.bag, "_items_data", [])
-        target = name.lower().strip()
-        for it in items:
-            if it.get("name", "").lower().strip() == target:
-                return int(it.get("count", 0))
-        return 0
+    def _get_items_data(self) -> list[dict]:
+        self._ensure_bag()
+        """Try to fetch items list from Bag in a robust way.
 
-    def _consume_item(self, name: str) -> bool:
+        Supports:
+        - bag._items_data (our standard)
+        - bag.items / bag.get("items")
+        - if bag has _resolve_bag(), call it once to refresh cached lists
+        """
         if not self.bag:
-            return True
+            return []
+        # if Bag has a resolver, try it once (safe)
+        resolver = getattr(self.bag, "_resolve_bag", None)
+        if callable(resolver):
+            try:
+                resolver()
+            except Exception:
+                pass
 
-        items = getattr(self.bag, "_items_data", [])
-        target = name.lower().strip()
-        for it in items:
-            if it.get("name", "").lower().strip() == target:
-                cnt = int(it.get("count", 0))
-                if cnt <= 0:
-                    return False
-                it["count"] = cnt - 1
-                return True
-        return False
+        items = getattr(self.bag, "_items_data", None)
+        if isinstance(items, list):
+            return items
 
-    def _consume_item_any(self, names: list[str]) -> bool:
-        if not self.bag:
-            return True
-        for nm in names:
-            if self._consume_item(nm):
-                return True
-        return False
+        items = getattr(self.bag, "items", None)
+        if isinstance(items, list):
+            return items
+
+        if isinstance(self.bag, dict) and isinstance(self.bag.get("items"), list):
+            return self.bag["items"]
+
+        return []
+
+    # NOTE:
+    # Item count / consume is handled by the alias-aware helpers below:
+    #   - _get_item_count_any(...)
+    #   - _consume_item_any(...)
+    # We keep a single source of truth to avoid inconsistent behavior.
+
 
     def _get_party(self) -> list[dict]:
+        self._ensure_bag()
         if not self.bag:
             return []
-        mons = getattr(self.bag, "_monsters_data", [])
-        if not isinstance(mons, list):
-            return []
-        return mons
+
+        mons = getattr(self.bag, "_monsters_data", None)
+        if isinstance(mons, list):
+            return mons
+
+        mons = getattr(self.bag, "monsters", None)
+        if isinstance(mons, list):
+            return mons
+
+        if isinstance(self.bag, dict) and isinstance(self.bag.get("monsters"), list):
+            return self.bag["monsters"]
+
+        return []
+
+
 
     def _can_open_switch_menu(self) -> bool:
         return len(self._get_party()) >= 2
@@ -709,38 +812,7 @@ class BattleScene(Scene):
     # -------------------------------------------------
     # Switch menu UI helpers
     # -------------------------------------------------
-    def _get_switch_list_rect(self, panel: pg.Rect) -> pg.Rect:
-        """
-        Switch 視窗中「清單可視區域」(用來做 clip + 點擊判定)
-        上方留 title，下方留一點 padding
-        """
-        margin_top = 60
-        margin_bottom = 18
-        return pg.Rect(panel.x + 20, panel.y + margin_top, panel.width - 40, panel.height - margin_top - margin_bottom)
-
-    def _get_switch_max_scroll(self, party_count: int, row_h: int, list_rect: pg.Rect) -> int:
-        total_h = party_count * row_h
-        return max(0, total_h - list_rect.height)
-
-    def _read_mouse_wheel(self) -> int:
-        """
-        不同專案 input_manager 可能有不同滾輪欄位：
-        - mouse_wheel_y / wheel_y / scroll_y ...
-        這裡用 getattr 安全讀，讀不到就當作 0
-        回傳值：正/負（依你的 input_manager 定義）
-        """
-        for attr in ("mouse_wheel_y", "wheel_y", "scroll_y", "mouse_wheel"):
-            v = getattr(input_manager, attr, 0)
-            # 有些人做成 function mouse_wheel() -> int
-            if callable(v):
-                try:
-                    v = v()
-                except Exception:
-                    v = 0
-            if isinstance(v, int) and v != 0:
-                return v
-        return 0
-
+    
     def _get_switch_panel_rect(self) -> pg.Rect:
         w, h = 420, 260
         x = (GameSettings.SCREEN_WIDTH - w) // 2
@@ -758,6 +830,7 @@ class BattleScene(Scene):
         ]
 
     def _handle_switch_menu(self) -> None:
+        # ESC 關閉
         if input_manager.key_pressed(pg.K_ESCAPE):
             self.in_switch_menu = False
             self.message = self.message_menu
@@ -769,85 +842,82 @@ class BattleScene(Scene):
             self.message = "You have no Pokemon!"
             return
 
+        # ✅ 重要：點擊區域要跟 _draw_switch_panel() 完全一致
         panel = self._get_switch_panel_rect()
-        list_rect = self._get_switch_list_rect(panel)
-
-        # 這些要跟 draw 那邊一致
         banner_h = 50
         gap = 12
-        row_h = banner_h + gap
+        card_x = panel.x + 20
+        card_w = 260  # 你 draw 時 banner_w = 260
+        card_y0 = panel.y + 60
 
-        # ---------- Scroll input ----------
-        # keyboard scroll
-        if input_manager.key_pressed(pg.K_DOWN) or input_manager.key_pressed(pg.K_s):
-            self.switch_scroll_y += self.switch_scroll_speed
-        if input_manager.key_pressed(pg.K_UP) or input_manager.key_pressed(pg.K_w):
-            self.switch_scroll_y -= self.switch_scroll_speed
-
-        # mouse wheel scroll (如果你的 input_manager 有提供)
-        wheel_y = self._read_mouse_wheel()
-        if wheel_y != 0:
-            # 有些專案 wheel_y 往上是 +1，有些是 -1
-            # 這裡統一成：wheel_y > 0 → 往上捲（scroll_y 減少）
-            if wheel_y > 0:
-                self.switch_scroll_y -= self.switch_scroll_speed
-            else:
-                self.switch_scroll_y += self.switch_scroll_speed
-
-        max_scroll = self._get_switch_max_scroll(len(party), row_h, list_rect)
-        self.switch_scroll_y = max(0, min(self.switch_scroll_y, max_scroll))
-
-        # ---------- Click to select ----------
         if input_manager.mouse_pressed(pg.BUTTON_LEFT):
             mx, my = input_manager.mouse_pos
 
-            # 只處理點在清單可視區域內的點擊
-            if list_rect.collidepoint(mx, my):
-                # 把可視座標轉成清單「真實座標」：加上 scroll
-                local_y = (my - list_rect.y) + self.switch_scroll_y
-                idx = local_y // row_h
+            for idx, mon in enumerate(party):
+                y = card_y0 + idx * (banner_h + gap)
+                rect = pg.Rect(card_x, y, card_w, banner_h)
 
-                if 0 <= idx < len(party):
-                    if idx == self.active_party_index:
-                        self.in_switch_menu = False
-                        self.message = f"{party[idx].get('name', 'This one')} is already in battle."
-                        return
+                if not rect.collidepoint(mx, my):
+                    continue
 
-                    self.active_party_index = int(idx)
-                    chosen = party[self.active_party_index]
-
-                    # reset buffs
-                    self.attack_buff = 0
-                    self.defense_buff = 0
-
-                    # update hp
-                    max_hp = int(chosen.get("max_hp", self.player_max_hp))
-                    cur_hp = int(chosen.get("hp", max_hp))
-                    self.player_max_hp = max_hp
-                    self.player_hp = cur_hp
-
-                    # element
-                    ele = chosen.get("element")
-                    if isinstance(ele, str) and ele:
-                        self.player_element = ele
-
-                    # species id
-                    sid = self._infer_species_id(chosen)
-                    self.player_species_id = sid
-                    if sid is not None:
-                        self.player_name = f"sprite{sid}"
-                    else:
-                        self.player_name = str(chosen.get("name", self.player_name))
-
-                    self._update_player_anim_for_mon(chosen)
-
-                    self.in_switch_menu = False
-                    self.message = f"Go! {self.player_name}!"
-
-                    # zoom
-                    self.player_zoom_timer = 0.0
-                    self.phase = "PLAYER_ZOOM"
+                # 1) 點到正在上場的那隻：不要關閉視窗，只提示
+                if idx == self.active_party_index:
+                    self.message = f"{party[idx].get('name', 'This one')} is already in battle."
                     return
+
+                # 2) 不能切換已倒下的
+                if int(mon.get("hp", 0)) <= 0:
+                    self.message = f"{mon.get('name', 'That Pokemon')} has fainted!"
+                    return
+
+                # 3) ✅ 防呆：如果其實沒有任何「其他活著的」就不讓切
+                #    （避免你的 _can_open_switch_menu 判斷太寬造成誤開）
+                has_other_alive = False
+                for j, m2 in enumerate(party):
+                    if j != self.active_party_index and int(m2.get("hp", 0)) > 0:
+                        has_other_alive = True
+                        break
+                if not has_other_alive:
+                    self.in_switch_menu = False
+                    self.message = "No other Pokemon to switch!"
+                    return
+
+                # ✅ 切換成功
+                self.active_party_index = idx
+                chosen = party[idx]
+
+                # reset buffs
+                self.attack_buff = 0
+                self.defense_buff = 0
+
+                # update hp
+                max_hp = int(chosen.get("max_hp", self.player_max_hp))
+                cur_hp = int(chosen.get("hp", max_hp))
+                self.player_max_hp = max_hp
+                self.player_hp = cur_hp
+
+                # element（若 monster 沒寫 element，就依 species_id/sprite 自動推斷）
+                ele = infer_element_from_mon(chosen)
+                if isinstance(ele, str) and ele:
+                    self.player_element = ele
+
+                # species id / name
+                sid = self._infer_species_id(chosen)
+                self.player_species_id = sid
+                if sid is not None:
+                    self.player_name = f"sprite{sid}"
+                else:
+                    self.player_name = str(chosen.get("name", self.player_name))
+
+                self._update_player_anim_for_mon(chosen)
+
+                self.in_switch_menu = False
+                self.message = f"Go! {self.player_name}!"
+
+                # zoom
+                self.player_zoom_timer = 0.0
+                self.phase = "PLAYER_ZOOM"
+                return
 
 
     # -------------------------------------------------
@@ -1029,29 +1099,10 @@ class BattleScene(Scene):
 
         icon_size = 40
         gap = 12
-        row_h = banner_h + gap
-
-        # 清單可視區域（用來 clip）
-        list_rect = self._get_switch_list_rect(panel)
-
-        # clamp scroll（避免 party 數量變動導致超出）
-        max_scroll = self._get_switch_max_scroll(len(party), row_h, list_rect)
-        self.switch_scroll_y = max(0, min(self.switch_scroll_y, max_scroll))
-
-        # 只畫可視區域
-        old_clip = screen.get_clip()
-        screen.set_clip(list_rect)
-
-        # 重要：畫的 y 要扣掉 scroll
-        start_y = list_rect.y - self.switch_scroll_y
 
         for i, mon in enumerate(party):
             x = panel.x + 20
-            y = start_y + i * row_h
-
-            # 略過完全不在可視區域的 row（小優化）
-            if y + banner_h < list_rect.top or y > list_rect.bottom:
-                continue
+            y = panel.y + 60 + i * (banner_h + gap)
 
             screen.blit(banner_img, (x, y))
 
@@ -1081,8 +1132,8 @@ class BattleScene(Scene):
             screen.blit(lv_text, (x + banner_w - lv_text.get_width() - 10, y + 6))
 
             hp = int(mon.get("hp", 0))
-            max_hp2 = int(mon.get("max_hp", max(hp, 1)))
-            ratio = hp / max_hp2 if max_hp2 > 0 else 0
+            max_hp = int(mon.get("max_hp", max(hp, 1)))
+            ratio = hp / max_hp if max_hp > 0 else 0
 
             bar_x = x + 60
             bar_y = y + banner_h - 18
@@ -1093,7 +1144,7 @@ class BattleScene(Scene):
             inner = pg.Rect(bar_x + 2, bar_y + 2, int((bar_w - 4) * ratio), bar_h - 4)
             pg.draw.rect(screen, (86, 176, 66), inner)
 
-            hp_text = self.font_small.render(f"{hp}/{max_hp2}", True, (0, 0, 0))
+            hp_text = self.font_small.render(f"{hp}/{max_hp}", True, (0, 0, 0))
             screen.blit(
                 hp_text,
                 (
@@ -1101,20 +1152,6 @@ class BattleScene(Scene):
                     bar_y + bar_h // 2 - hp_text.get_height() // 2,
                 ),
             )
-
-        # 還原 clip
-        screen.set_clip(old_clip)
-
-        # （可選）畫一個簡單 scrollbar（不影響功能）
-        if max_scroll > 0:
-            track = pg.Rect(panel.right - 16, list_rect.top, 6, list_rect.height)
-            pg.draw.rect(screen, (60, 60, 60), track)
-
-            thumb_h = max(24, int(list_rect.height * (list_rect.height / (list_rect.height + max_scroll))))
-            thumb_y = list_rect.top + int((list_rect.height - thumb_h) * (self.switch_scroll_y / max_scroll))
-            thumb = pg.Rect(track.x, thumb_y, track.width, thumb_h)
-            pg.draw.rect(screen, (230, 230, 230), thumb)
-
 
     # -------------------------------------------------
     # Radial transition
@@ -1144,4 +1181,130 @@ class BattleScene(Scene):
 
             pg.draw.polygon(overlay, (0, 0, 0, 0), [p1, p2, p3])
 
-        screen.blit(overlay, (0, 0))
+    # =================================================
+    # Item name normalization + alias-aware counts
+    # =================================================
+    # 你背包裡的道具名字可能會是：
+    # - "Heal Potion" / "heal_potion" / "potion"
+    # - "Strength Potion" / "strength_potion"
+    # - "Defense Potion" / "defense_potion"
+    #
+    # 這裡做一個「同義名稱」的統一處理，讓 UI 顯示正確數量、也能順利消耗。
+
+    HEAL_POTION_ALIASES = [
+        "heal potion", "heal_potion", "potion", "Potion", "Heal Potion"
+    ]
+    STRENGTH_POTION_ALIASES = [
+        "strength potion", "strength_potion", "Strength Potion"
+    ]
+    DEFENSE_POTION_ALIASES = [
+        "defense potion", "defense_potion", "Defense Potion"
+    ]
+
+    def _norm_item_name(self, s: str) -> str:
+        s = str(s).lower().strip().replace("_", " ")
+        s = re.sub(r"\s+", " ", s)
+        return s
+
+    def _get_item_count_any(self, names: list[str]) -> int:
+        if not self.bag:
+            return 999
+        items = self._get_items_data()
+        if not isinstance(items, list):
+            return 0
+        aliases = {self._norm_item_name(n) for n in names if n}
+        for it in items:
+            nm = self._norm_item_name(it.get("name", ""))
+            if nm in aliases:
+                return int(it.get("count", 0))
+        return 0
+
+    def _consume_item_any(self, names: list[str]) -> bool:
+        if not self.bag:
+            return True
+        items = self._get_items_data()
+        if not isinstance(items, list):
+            return False
+        aliases = {self._norm_item_name(n) for n in names if n}
+        for it in items:
+            nm = self._norm_item_name(it.get("name", ""))
+            if nm in aliases:
+                cnt = int(it.get("count", 0))
+                if cnt <= 0:
+                    return False
+                it["count"] = cnt - 1
+                return True
+        return False
+
+    # -------------------------------------------------
+    # Item menu buttons (3 items + cancel) with counts
+    # -------------------------------------------------
+    def _get_item_buttons(self):
+        heal_cnt = self._get_item_count_any(self.HEAL_POTION_ALIASES)
+        str_cnt = self._get_item_count_any(self.STRENGTH_POTION_ALIASES)
+        def_cnt = self._get_item_count_any(self.DEFENSE_POTION_ALIASES)
+
+        labels = [
+            f"Heal Potion x{heal_cnt}",
+            f"Strength Potion x{str_cnt}",
+            f"Defense Potion x{def_cnt}",
+            "Cancel",
+        ]
+        btn_w, btn_h = 190, 40
+        gap = 16
+        total_width = btn_w * len(labels) + gap * (len(labels) - 1)
+        x_start = (GameSettings.SCREEN_WIDTH - total_width) // 2
+        y = self.dialog_rect.top + 60
+
+        return [
+            (pg.Rect(x_start + i * (btn_w + gap), y, btn_w, btn_h), label)
+            for i, label in enumerate(labels)
+        ]
+
+    def _draw_item_buttons(self, screen: pg.Surface) -> None:
+        # 讓道具選單跟主選單長得一致（可點擊）
+        for rect, label in self._get_item_buttons():
+            pg.draw.rect(screen, (230, 215, 190), rect)
+            pg.draw.rect(screen, (0, 0, 0), rect, 2)
+            txt = self.font_small.render(label, True, (0, 0, 0))
+            screen.blit(txt, txt.get_rect(center=rect.center))
+
+    def _handle_item_menu(self) -> None:
+        # ESC 關閉
+        if input_manager.key_pressed(pg.K_ESCAPE):
+            self.in_item_menu = False
+            self.message = self.message_menu
+            return
+
+        # 1/2/3/4 快捷鍵
+        if input_manager.key_pressed(pg.K_1):
+            self._use_heal_potion()
+            return
+        if input_manager.key_pressed(pg.K_2):
+            self._use_strength_potion()
+            return
+        if input_manager.key_pressed(pg.K_3):
+            self._use_defense_potion()
+            return
+        if input_manager.key_pressed(pg.K_4):
+            self.in_item_menu = False
+            self.message = self.message_menu
+            return
+
+        # 點擊按鈕
+        if input_manager.mouse_pressed(pg.BUTTON_LEFT):
+            mx, my = input_manager.mouse_pos
+            for rect, label in self._get_item_buttons():
+                if not rect.collidepoint(mx, my):
+                    continue
+
+                if label.startswith("Heal Potion"):
+                    self._use_heal_potion()
+                elif label.startswith("Strength Potion"):
+                    self._use_strength_potion()
+                elif label.startswith("Defense Potion"):
+                    self._use_defense_potion()
+                else:
+                    self.in_item_menu = False
+                    self.message = self.message_menu
+                return

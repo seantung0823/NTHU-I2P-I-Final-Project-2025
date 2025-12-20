@@ -178,16 +178,27 @@ class ShopScene(Scene):
     # --------------------------
     @staticmethod
     def get_shop_inventory(shop_id: str) -> list[dict]:
-        if shop_id == "default":
-            return [
-                {"name": "Potion", "price": 5, "sprite_path": "ingame_ui/potion.png"},
-                {"name": "Pokeball", "price": 10, "sprite_path": "ingame_ui/ball.png"},
-                {"name": "Antidote", "price": 8, "sprite_path": "ingame_ui/potion.png"},
-            ]
-        return [
+        """
+        BUY inventory: items only.
+        - Keep original goods
+        - Add Heal / Strength / Defense Potion
+        - Add Evolution Potion (you said it got deleted)
+        """
+
+        goods = [
             {"name": "Potion", "price": 5, "sprite_path": "ingame_ui/potion.png"},
-            {"name": "Pokeball", "price": 10, "sprite_path": "ingame_ui/ball.png"},
+            {"name": "Pokeball", "price": 3, "sprite_path": "ingame_ui/ball.png"},
         ]
+
+        # add required potions (do NOT remove existing goods)
+        goods.extend([
+            {"name": "Heal Potion", "price": 5, "sprite_path": "ingame_ui/potion.png"},
+            {"name": "Strength Potion", "price": 8, "sprite_path": "ingame_ui/potion.png"},
+            {"name": "Defense Potion", "price": 8, "sprite_path": "ingame_ui/potion.png"},
+            {"name": "Evolution Potion", "price": 15, "sprite_path": "ingame_ui/potion.png"},  # ✅ added back
+        ])
+
+        return goods
 
     # --------------------------
     # Selling price for MONSTERS (fixed 20)

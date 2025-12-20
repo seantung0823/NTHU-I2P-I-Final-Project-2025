@@ -9,7 +9,33 @@
           "classification": "stationary",
           "facing": "DOWN",
           "max_tiles": 2,
-          "sprite": "ow2.png"
+          "sprite": "ow2.png",
+          "enemy_pool": [
+            {
+              "name": "sprite1",
+              "species_id": 1,
+              "level": 8,
+              "max_hp": 60,
+              "battle_sprite": "sprites/sprite1_idle.png",
+              "element": "Grass"
+            },
+            {
+              "name": "sprite15",
+              "species_id": 15,
+              "level": 6,
+              "max_hp": 55,
+              "battle_sprite": "sprites/sprite15_idle.png",
+              "element": "Grass"
+            }
+          ],
+          "enemy_mon": {
+            "name": "sprite1",
+            "species_id": 1,
+            "level": 8,
+            "max_hp": 60,
+            "battle_sprite": "sprites/sprite1_idle.png",
+            "element": "Grass"
+          }
         },
         {
           "x": 54,
@@ -17,7 +43,33 @@
           "classification": "stationary",
           "facing": "UP",
           "max_tiles": 2,
-          "sprite": "ow3.png"
+          "sprite": "ow3.png",
+          "enemy_pool": [
+            {
+              "name": "sprite6",
+              "species_id": 6,
+              "level": 9,
+              "max_hp": 65,
+              "battle_sprite": "sprites/sprite6_idle.png",
+              "element": "Water"
+            },
+            {
+              "name": "sprite12",
+              "species_id": 12,
+              "level": 7,
+              "max_hp": 58,
+              "battle_sprite": "sprites/sprite12_idle.png",
+              "element": "Water"
+            }
+          ],
+          "enemy_mon": {
+            "name": "sprite6",
+            "species_id": 6,
+            "level": 9,
+            "max_hp": 65,
+            "battle_sprite": "sprites/sprite6_idle.png",
+            "element": "Water"
+          }
         },
         {
           "x": 31,
@@ -25,7 +77,33 @@
           "classification": "stationary",
           "facing": "UP",
           "max_tiles": 2,
-          "sprite": "ow6.png"
+          "sprite": "ow6.png",
+          "enemy_pool": [
+            {
+              "name": "sprite7",
+              "species_id": 7,
+              "level": 10,
+              "max_hp": 70,
+              "battle_sprite": "sprites/sprite7_idle.png",
+              "element": "Fire"
+            },
+            {
+              "name": "sprite9",
+              "species_id": 9,
+              "level": 8,
+              "max_hp": 62,
+              "battle_sprite": "sprites/sprite9_idle.png",
+              "element": "Fire"
+            }
+          ],
+          "enemy_mon": {
+            "name": "sprite7",
+            "species_id": 7,
+            "level": 10,
+            "max_hp": 70,
+            "battle_sprite": "sprites/sprite7_idle.png",
+            "element": "Fire"
+          }
         }
       ],
       "shop_npcs": [],
@@ -116,7 +194,19 @@
         "hp": 85,
         "max_hp": 100,
         "level": 25,
-        "sprite_path": "menu_sprites/menusprite1.png"
+        "sprite_path": "menu_sprites/menusprite1.png",
+        "species_id": 1,
+        "element": "Grass"
+      },
+      {
+        "name": "Pikachu",
+        "hp": 70,
+        "max_hp": 70,
+        "level": 20,
+        "species_id": 3,
+        "sprite_path": "menu_sprites/menusprite3.png",
+        "battle_sprite": "sprites/sprite3_idle.png",
+        "element": "Grass"
       }
     ],
     "items": [
@@ -134,6 +224,16 @@
         "name": "Pokeball",
         "count": 10,
         "sprite_path": "ingame_ui/ball.png"
+      },
+      {
+        "name": "Strength Potion",
+        "count": 1,
+        "sprite_path": "ingame_ui/potion.png"
+      },
+      {
+        "name": "Defense Potion",
+        "count": 1,
+        "sprite_path": "ingame_ui/potion.png"
       }
     ]
   }

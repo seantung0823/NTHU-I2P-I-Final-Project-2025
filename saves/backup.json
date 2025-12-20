@@ -104,8 +104,8 @@
   ],
   "current_map": "map.tmx",
   "player": {
-    "x": 22.78870649403663,
-    "y": 29.357989898732228
+    "x": 18.864091629284925,
+    "y": 30.004091629284904
   },
   "bag": {
     "monsters": [
@@ -114,25 +114,9 @@
         "hp": 85,
         "max_hp": 100,
         "level": 25,
-        "sprite_path": "menu_sprites/menusprite1.png"
-      },
-      {
-        "name": "Rattata",
-        "hp": 55,
-        "max_hp": 55,
-        "level": 20,
-        "species_id": 2,
-        "sprite_path": "menu_sprites/menusprite2.png",
-        "battle_sprite": "sprites/sprite2_idle.png"
-      },
-      {
-        "name": "Pidgey",
-        "hp": 60,
-        "max_hp": 60,
-        "level": 20,
-        "species_id": 1,
         "sprite_path": "menu_sprites/menusprite1.png",
-        "battle_sprite": "sprites/sprite1_idle.png"
+        "species_id": 1,
+        "element": "Grass"
       },
       {
         "name": "Pikachu",
@@ -141,33 +125,35 @@
         "level": 20,
         "species_id": 3,
         "sprite_path": "menu_sprites/menusprite3.png",
-        "battle_sprite": "sprites/sprite3_idle.png"
-      },
-      {
-        "name": "Oddish",
-        "hp": 65,
-        "max_hp": 65,
-        "level": 20,
-        "species_id": 4,
-        "sprite_path": "menu_sprites/menusprite4.png",
-        "battle_sprite": "sprites/sprite4_idle.png"
+        "battle_sprite": "sprites/sprite3_idle.png",
+        "element": "Grass"
       }
     ],
     "items": [
       {
         "name": "Potion",
-        "count": 4,
+        "count": 5,
         "sprite_path": "ingame_ui/potion.png"
       },
       {
         "name": "Coins",
-        "count": 3,
+        "count": 7,
         "sprite_path": "ingame_ui/coin.png"
       },
       {
         "name": "Pokeball",
-        "count": 2,
+        "count": 6,
         "sprite_path": "ingame_ui/ball.png"
+      },
+      {
+        "name": "Strength Potion",
+        "count": 1,
+        "sprite_path": "ingame_ui/potion.png"
+      },
+      {
+        "name": "Defense Potion",
+        "count": 1,
+        "sprite_path": "ingame_ui/potion.png"
       }
     ]
   }
